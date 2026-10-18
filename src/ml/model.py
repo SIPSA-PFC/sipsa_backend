@@ -112,10 +112,30 @@ def train_rep(x_train: np.ndarray, y_train: np.ndarray, seed: int):
     return model
 
 
+def _compiled(model):
+    """
+    A compiled (graph-mode) forward pass for this model, built once and kept
+    on the model. Eager Keras runs the LSTM step by step in Python (~0.35 s
+    for 200 weeks); the compiled call takes ~6 ms and gives the same outputs.
+    The signature accepts any sequence length, so it is traced only once.
+    """
+    fn = getattr(model, "_sipsa_forward", None)
+    if fn is None:
+        t = tf()
+
+        def forward(x):
+            return model(x, training=False)
+
+        fn = t.function(forward, input_signature=[t.TensorSpec([1, None, model.input_shape[-1]], t.float32)],
+                        reduce_retracing=True)
+        model._sipsa_forward = fn
+    return fn
+
+
 def predict_sequence(model, x: np.ndarray) -> np.ndarray:
     """
     Outputs for every week of x (n_features, n_weeks), starting from a reset
     state — equivalent to MATLAB's resetState + predictAndUpdateState.
     """
-    out = model(x.T[np.newaxis].astype("float32"), training=False)
+    out = _compiled(model)(x.T[np.newaxis].astype("float32"))
     return np.asarray(out).reshape(-1)

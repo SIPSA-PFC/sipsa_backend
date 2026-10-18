@@ -21,9 +21,8 @@ Models
     model_run         — one trained model configuration (input, lag) of a
                         training run: training window, metrics, saved files
 
-Derived
-    model_prediction  — cached LSTM output (replaced by `forecast` in
-                        refactor/offline-inference)
+Forecasts
+    forecast          — model output per area, as-of week and target week
 
 Dengue cases and ovitrap readings are different measurement systems and are
 stored and queried separately.
@@ -32,8 +31,8 @@ stored and queried separately.
 from datetime import date, datetime
 
 from sqlalchemy import (
-    JSON, Boolean, CheckConstraint, Date, DateTime, Float, ForeignKey, Integer, String, Text,
-    UniqueConstraint, func, true,
+    JSON, Boolean, CheckConstraint, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text,
+    UniqueConstraint, func, text, true,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -220,32 +219,60 @@ class User(Base):
 
 
 # =============================================================================
-# Derived (interim — replaced by `forecast` in refactor/offline-inference)
+# Forecasts
 # =============================================================================
 
-class ModelPrediction(Base):
+FORECAST_SCOPES = ("city", "district", "neighborhood")
+FORECAST_METHODS = ("model", "split")
+
+
+class Forecast(Base):
     """
-    Cached LSTM output. Target weeks are in the future, so they are stored as
-    (epi_year, epi_week) values rather than as a link to epi_week rows.
+    One forecast value: what a model run predicted for one area and target
+    week, using data observed up to the as-of week.
+
+    predicted / lower / upper are weekly cases in the area (for the city: all
+    neighborhoods together). method is 'model' for the LSTM output itself and
+    'split' for values derived from it (district / neighborhood shares).
+
+    Target weeks may lie after the last observed week, so they are rows of
+    epi_week created on demand.
     """
-    __tablename__ = "model_prediction"
+    __tablename__ = "forecast"
     __table_args__ = (
-        UniqueConstraint(
-            "neighborhood_id", "epi_year", "epi_week", "model_version", "input_type", "lag",
-            name="uq_model_prediction_config",   # explicit: the generated name exceeds PostgreSQL's 63 chars
+        CheckConstraint("scope IN ('city', 'district', 'neighborhood')", name="scope"),
+        CheckConstraint("method IN ('model', 'split')", name="method"),
+        CheckConstraint(
+            "(scope = 'city' AND district_id IS NULL AND neighborhood_id IS NULL)"
+            " OR (scope = 'district' AND district_id IS NOT NULL AND neighborhood_id IS NULL)"
+            " OR (scope = 'neighborhood' AND neighborhood_id IS NOT NULL AND district_id IS NULL)",
+            name="area_matches_scope",
         ),
-        CheckConstraint("input_type IN ('dengue', 'edi')", name="input_type"),
+        CheckConstraint("horizon >= 1", name="horizon_positive"),
+        # One value per run, area, as-of week and target week. COALESCE because
+        # NULLs never collide in a unique index (the city has no area id).
+        Index(
+            "uq_forecast_key",
+            "model_run_id", "scope",
+            func.coalesce(text("district_id"), 0), func.coalesce(text("neighborhood_id"), 0),
+            "as_of_week_id", "target_week_id",
+            unique=True,
+        ),
     )
 
     id:              Mapped[int]             = mapped_column(Integer, primary_key=True)
-    neighborhood_id: Mapped[int]             = mapped_column(ForeignKey("neighborhood.id"), nullable=False)
-    epi_year:        Mapped[int]             = mapped_column(Integer, nullable=False)
-    epi_week:        Mapped[int]             = mapped_column(Integer, nullable=False)
-    week_start:      Mapped[date]            = mapped_column(Date, nullable=False)
-    predicted_cases: Mapped[float]           = mapped_column(Float, nullable=False)
-    lower_bound:     Mapped[float | None]    = mapped_column(Float)
-    upper_bound:     Mapped[float | None]    = mapped_column(Float)
-    model_version:   Mapped[str]             = mapped_column(String(50), nullable=False)
-    input_type:      Mapped[str]             = mapped_column(String(10), nullable=False)
-    lag:             Mapped[int]             = mapped_column(Integer, nullable=False)
+    model_run_id:    Mapped[int]             = mapped_column(ForeignKey("model_run.id", ondelete="CASCADE"), nullable=False, index=True)
+    scope:           Mapped[str]             = mapped_column(String(12), nullable=False)
+    district_id:     Mapped[int | None]      = mapped_column(ForeignKey("district.id"))
+    neighborhood_id: Mapped[int | None]      = mapped_column(ForeignKey("neighborhood.id"))
+    as_of_week_id:   Mapped[int]             = mapped_column(ForeignKey("epi_week.id"), nullable=False)
+    target_week_id:  Mapped[int]             = mapped_column(ForeignKey("epi_week.id"), nullable=False)
+    horizon:         Mapped[int]             = mapped_column(Integer, nullable=False)    # weeks after as-of
+    predicted:       Mapped[float]           = mapped_column(Float, nullable=False)
+    lower:           Mapped[float | None]    = mapped_column(Float)
+    upper:           Mapped[float | None]    = mapped_column(Float)
+    method:          Mapped[str]             = mapped_column(String(10), nullable=False, default="model")
     generated_at:    Mapped[datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    model_run:   Mapped["ModelRun"] = relationship()
+    target_week: Mapped["EpiWeek"]  = relationship(foreign_keys=[target_week_id])

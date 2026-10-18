@@ -44,6 +44,10 @@ def _risk_from_rmse(rmse: float) -> str:
     return "high"                     # poor model
 
 
+# Parsed results per file, reused until the file changes (path, mtime).
+_CACHE: dict[tuple[str, float], ResultadosOut] = {}
+
+
 class ResultadosService:
 
     def __init__(self, mat_path: str | Path):
@@ -62,6 +66,13 @@ class ResultadosService:
 
     def get_resultados(self) -> ResultadosOut:
         self._assert_available()
+        key = (str(self.mat_path), self.mat_path.stat().st_mtime)
+        if key not in _CACHE:
+            _CACHE.clear()
+            _CACHE[key] = self._compute()
+        return _CACHE[key]
+
+    def _compute(self) -> ResultadosOut:
 
         res   = load_eval_results(self.mat_path)
         YPred = res["YPred"]    # (42, 30, 10)

@@ -12,7 +12,7 @@ Run: python -m src.etl.migrate
 
 Safe to run again: reference rows (sources, districts, neighborhoods, weeks)
 are updated in place, and measurements are replaced, all in one transaction.
-Cached predictions are cleared because they depend on the data.
+Stored forecasts are cleared because they depend on the data.
 """
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ from sqlalchemy import delete, inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.models.db_models import (
-    DataSource, DengueCase, District, EpiWeek, ModelPrediction, Neighborhood,
+    DataSource, DengueCase, District, EpiWeek, Forecast, Neighborhood,
     OvitrapReading, Socioeconomic,
 )
 from src.core import epiweek
@@ -280,14 +280,14 @@ async def run() -> None:
             n_census = await _load_census(session, census, ids, src["census"])
             n_dengue = await _load_dengue(session, dengue_df, week_ids, ids, src["dengue"])
             n_ovi    = await _load_ovitrap(session, opi, edi, week_ids, ref, ids, src["ovitrap"])
-            cleared  = (await session.execute(delete(ModelPrediction))).rowcount
+            cleared  = (await session.execute(delete(Forecast))).rowcount
     finally:
         await engine.dispose()
 
     log.info("Sources: %d | weeks: %d (%s to %s) | neighborhoods: %d | districts: %d",
              len(src), len(weeks), epiweek.week_start(*weeks[0]),
              epiweek.week_start(*weeks[-1]) + timedelta(days=6), len(ids), ref["district"].nunique())
-    log.info("Census rows: %d | dengue_case rows: %d | ovitrap_reading rows: %d | cached predictions cleared: %d",
+    log.info("Census rows: %d | dengue_case rows: %d | ovitrap_reading rows: %d | stored forecasts cleared: %d",
              n_census, n_dengue, n_ovi, cleared)
 
 

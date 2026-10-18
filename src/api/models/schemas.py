@@ -91,28 +91,44 @@ class OvitrapSeriesOut(BaseModel):
 
 
 # =============================================================================
-# Prediction  — GET /predicao/{neighborhood_id}
-# predicted_cases is already back-transformed (2^YPred) — real case units
+# Forecasts  — GET /predicao
 # =============================================================================
 
-class PredictionPointOut(BaseModel):
-    week_start:       date
-    epi_year:         int
-    epi_week:         int
-    predicted_cases:  float
-    lower_bound:      Optional[float] = None
-    upper_bound:      Optional[float] = None
+class WeekOut(BaseModel):
+    epi_year:   int
+    epi_week:   int
+    week_start: date          # Sunday
 
 
-class PredictionOut(BaseModel):
-    neighborhood_id:   int
-    neighborhood_name: str
-    input_type:        str        # "dengue" | "edi"
-    lag:               int
-    model_version:     str
-    generated_at:      datetime
-    risk_level:        str        # "high" | "moderate" | "low"
-    series:            list[PredictionPointOut]
+class ForecastPointOut(BaseModel):
+    horizon:               int              # weeks after the as-of week
+    week_start:            date
+    epi_year:              int
+    epi_week:              int
+    predicted_cases:       float            # weekly cases in the area (city: all neighborhoods)
+    lower_bound:           Optional[float] = None
+    upper_bound:           Optional[float] = None
+    mean_per_neighborhood: Optional[float] = None   # the model's own unit (city scope only)
+
+
+class ForecastOut(BaseModel):
+    """
+    A forecast made with data observed up to `as_of`.
+    lower/upper = mean ± 1 standard deviation across the model's repetitions
+    (their disagreement, not a calibrated interval).
+    """
+    scope:         str              # "city" | "district" | "neighborhood"
+    area_id:       Optional[int] = None
+    area_name:     str
+    input_type:    str              # "dengue" | "edi"
+    lag:           int
+    max_horizon:   int              # furthest week this configuration can forecast
+    model_version: str
+    method:        str              # "model" | "split"
+    as_of:         WeekOut
+    generated_at:  datetime
+    risk_level:    str              # "high" | "moderate" | "low"
+    series:        list[ForecastPointOut]
 
 
 # =============================================================================

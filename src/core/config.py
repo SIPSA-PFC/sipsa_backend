@@ -23,14 +23,6 @@ class Settings(BaseSettings):
     # ── Database ──────────────────────────────────────────────────────────────
     database_url: str = "postgresql+asyncpg://user:password@localhost:5432/dengue"
 
-    # ── Model weights ─────────────────────────────────────────────────────────
-    model_weights_path: str = str(ROOT / "data" / "models" / "eval_results.npz")
-
-    # ── Algorithm parameters (must match training in ml/train.py) ─────────────
-    n_back_samples:    list[int] = [1, 3, 4, 5, 6]
-    train_split:       float     = 0.8
-    min_history_weeks: int       = 6       # ValidationService: minimum weeks required
-
     # ── Auth (RN07) ───────────────────────────────────────────────────────────
     # Required, no default: tokens signed with a known key can be forged.
     secret_key:                    str

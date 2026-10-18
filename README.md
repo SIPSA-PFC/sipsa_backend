@@ -198,7 +198,7 @@ How the port compares with the paper: [`docs/REPRODUCTION.md`](docs/REPRODUCTION
 | `GET` | `/resultados` | No | No | Pre-computed model metrics and predictions |
 | `GET` | `/casos/{id}` | Yes | Yes | Weekly dengue case series |
 | `GET` | `/ovitrampas/{id}` | Yes | Yes | Weekly OPI + EDI series |
-| `GET` | `/predicao/{id}` | Yes | Yes | LSTM forecast for next 1–12 weeks |
+| `GET` | `/predicao` | Yes | Yes | City-wide forecast for the weeks after the latest data (1–4 weeks, by lag) |
 | `GET` | `/health` | No | No | Health check |
 
 ### Authentication
@@ -223,7 +223,10 @@ python -m src.cli list-users
 
 **`GET /resultados`** — No parameters, no token, no body. Reads the `.mat` file and returns metrics for all 10 models plus predicted vs actual time series for the two best models. Returns `503` if `Models_1DLSTM_2022_02_04_EvalResults.mat` is not in `data/raw/`.
 
-**`GET /predicao/{id}`** — Do not call during development. Triggers LSTM training which takes hours. Returns `503` if model weights have not been generated yet. Test `/casos` and `/ovitrampas` first.
+**`GET /predicao`** — Uses models saved by `python -m src.ml.train` (nothing is trained during a
+request). Returns `503` for a configuration with no trained model. The first request for a
+configuration loads its saved repetitions (a few seconds); forecasts are stored and reused until
+the data is reloaded.
 
 ### Query parameters
 
@@ -233,10 +236,16 @@ All weekly data uses Brazilian **epidemiological weeks** (Sunday–Saturday, as 
 each point has `epi_year`, `epi_week` and `week_start` (the Sunday). Week 1 is the first
 week with at least 4 days in January, so it can start in late December.
 
-`/predicao/{id}` accepts:
-- `input_type`: `"dengue"` or `"edi"` (default: `"dengue"`)
-- `lag`: `1`, `3`, `4`, `5`, or `6` (default: `1`) — any other value returns `422`
-- `n_weeks`: `1`–`12` (default: `4`)
+`/predicao` accepts:
+- `input_type`: `"dengue"` or `"edi"` (default: `"edi"`)
+- `lag`: `1`, `3`, `4`, `5`, or `6` (default: `6`) — any other value returns `422`
+- `n_weeks`: weeks ahead, at most the lag window's newest input (lag 1 or 3: 1 week; 4: 2;
+  5: 3; 6: 4). Default: that maximum. Forecasts only use data observed up to the latest week,
+  so they cannot reach further.
+
+Each forecast point has `predicted_cases` (city total for the week), `lower_bound` /
+`upper_bound` (mean ± 1 standard deviation across the model's repetitions — their
+disagreement, not a calibrated interval) and `mean_per_neighborhood` (the model's own unit).
 
 ### Error responses
 
@@ -244,8 +253,8 @@ week with at least 4 days in January, so it can start in late December.
 |---|---|
 | `401` | Missing or expired token |
 | `404` | Neighborhood not found |
-| `422` | Invalid query parameter, no geolocation, or insufficient history (< 6 weeks) |
-| `503` | `.mat` file missing or model weights not generated yet |
+| `422` | Invalid query parameter, horizon beyond what the lag allows, or gaps in the data |
+| `503` | `.mat` file missing, or no trained model for the requested configuration |
 
 ---
 
@@ -264,7 +273,8 @@ Managed with Alembic (`migrations/`). Apply with `alembic upgrade head`; after c
 | `epi_week` | Calendar of epidemiological weeks |
 | `dengue_case` | Weekly notified cases (whole numbers), one row per neighborhood per week and disease |
 | `ovitrap_reading` | Weekly OPI + EDI, one row per neighborhood per week |
-| `model_prediction` | Cached LSTM output (interim; replaced by `forecast`) |
+| `model_run` | One trained configuration of a training run: training window, metrics, saved model files |
+| `forecast` | Stored forecasts per model run, area (city / district / neighborhood), as-of week and target week |
 
 `dengue_case` and `ovitrap_reading` are always queried separately — they represent different measurement systems and are never combined.
 
