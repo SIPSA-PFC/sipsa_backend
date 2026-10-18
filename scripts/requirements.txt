@@ -1,0 +1,5 @@
+# Only for scripts/build_reference_data.py (one-off, not needed by the API or ETL)
+mat-io>=0.5
+geopandas>=1.0
+pyarrow>=15
+pandas>=2.0

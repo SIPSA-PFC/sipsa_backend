@@ -1,0 +1,37 @@
+name,code,district,egg_row,ibge_code,ibge_name,latitude,longitude,coord_method
+Alecrim,108,Leste,27,2408102011,Alecrim,-5.796764,-35.218434,centroid
+Areia Preta,105,Leste,26,2408102006,Areia Preta,-5.785486,-35.192006,centroid
+Barro Vermelho,007,Leste,2,2408102036,Barro Vermelho,-5.799312,-35.208004,centroid
+Bom Pastor,008,Oeste,3,2408102014,Bom Pastor,-5.808922,-35.246758,centroid
+Candelária,011,Sul,4,2408102019,Candelária,-5.845625,-35.221185,centroid
+Capim Macio,109,Sul,28,2408102025,Capim Macio,-5.857071,-35.199416,centroid
+Cidade Alta,014,Leste,5,2408102009,Cidade Alta,-5.785947,-35.208861,centroid
+Cidade Nova,017,Oeste,7,2408102020,Cidade Nova,-5.838605,-35.238507,centroid
+Cidade da Esperança,015,Oeste,6,2408102015,Cidade da Esperança,-5.826169,-35.235116,centroid
+Dix-sept Rosado,031,Oeste,8,2408102016,Dix-Sept Rosado,-5.80955,-35.22702,centroid
+Felipe Camarão,110,Oeste,29,2408102021,Filipe Camarão,-5.823697,-35.256288,centroid
+Guarapes,117,Oeste,36,2408102022,Guarapés,-5.836595,-35.270475,centroid
+Igapó,044,Norte 2,9,2408102028,Igapó,-5.769028,-35.262448,centroid
+Lagoa Azul,047,Norte 1,10,2408102033,Lagoa Azul,-5.723929,-35.259327,centroid
+Lagoa Nova,111,Sul,30,2408102017,Lagoa Nova,-5.824788,-35.211551,centroid
+Lagoa Seca,050,Leste,11,2408102010,Lagoa Seca,-5.807211,-35.210402,centroid
+Mãe Luiza,057,Leste,12,2408102007,Mãe Luíza,-5.794525,-35.187122,centroid
+Neópolis,061,Sul,14,2408102024,Neópolis,-5.867103,-35.207908,centroid
+Nordeste,006,Oeste,1,2408102013,Nordeste,-5.79305,-35.243774,centroid
+Nossa Senhora da Apresentação,112,Norte 2,31,2408102029,Nossa Senhora da Apresentação,-5.746767,-35.27816,centroid
+Nossa Senhora de Nazaré,060,Oeste,13,2408102037,Nossa Senhora de Nazaré,-5.817235,-35.231446,centroid
+Nova Descoberta,064,Sul,15,2408102018,Nova Descoberta,-5.827247,-35.197575,centroid
+Pajuçara,070,Norte 1,16,2408102034,Pajuçara,-5.736547,-35.235855,centroid
+Petrópolis,079,Leste,17,2408102005,Petrópolis,-5.784366,-35.197491,centroid
+Pitimbu,113,Sul,32,2408102023,Pitimbú,-5.862494,-35.233992,centroid
+Planalto,114,Sul,33,2408102038,Planalto,-5.852059,-35.256094,centroid
+Ponta Negra,115,Sul,34,2408102026,Ponta Negra,-5.884427,-35.177961,centroid
+Potengi,087,Norte 2,18,2408102031,Potengi,-5.75528,-35.249169,centroid
+Praia do Meio,089,Leste,19,2408102002,Praia do Meio,-5.779208,-35.194445,centroid
+Quintas,092,Oeste,20,2408102012,Quintas,-5.797138,-35.231521,centroid
+Redinha,093,Norte 1,21,2408102035,Redinha,-5.750978,-35.217025,centroid
+Ribeira,094,Leste,22,2408102004,Ribeira,-5.77644,-35.205523,centroid
+Rocas,095,Leste,23,2408102003,Rocas,-5.774297,-35.20011,centroid
+Salinas,116,Norte 2,35,2408102032,Salinas,-5.775257,-35.229334,centroid
+Santos Reis,098,Leste,24,2408102001,Santos Reis,-5.763318,-35.199403,centroid
+Tirol,102,Leste,25,2408102008,Tirol,-5.801362,-35.199909,centroid

@@ -91,6 +91,16 @@ These files are gitignored and must be copied manually.
 | `Rearranged_Data.mat` | ETL + training |
 | `Models_1DLSTM_2022_02_04_EvalResults.mat` | `/resultados` endpoint only |
 
+They come from the paper's repository (license CC BY-NC-SA 4.0); see
+[`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md) for sources, licenses and citations.
+
+The ETL also reads `data/reference/neighborhoods.csv` (committed), which maps each
+neighborhood across sources: its row in the ovitrap data, municipal code, health district and
+coordinates. See [`data/reference/README.md`](data/reference/README.md).
+
+`python -m src.etl.migrate` can be run again at any time: it updates reference rows in place,
+replaces the weekly data and clears cached predictions, all in one transaction.
+
 ---
 
 ## What to run — by goal
