@@ -14,7 +14,7 @@ pydantic>=2.6
 pydantic-settings>=2.2
 
 # Database
-sqlalchemy>=2.0
+sqlalchemy[asyncio]>=2.0
 aiosqlite>=0.20          # SQLite async driver — use for local testing
 asyncpg>=0.29            # PostgreSQL async driver — use for production
 alembic>=1.13
