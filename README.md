@@ -98,6 +98,9 @@ The ETL also reads `data/reference/neighborhoods.csv` (committed), which maps ea
 neighborhood across sources: its row in the ovitrap data, municipal code, health district and
 coordinates. See [`data/reference/README.md`](data/reference/README.md).
 
+New weeks of data are added with `python -m src.ingestion` — see
+[`docs/INGESTION.md`](docs/INGESTION.md).
+
 `python -m src.etl.migrate` can be run again at any time: it updates reference rows in place,
 replaces the weekly data and clears cached predictions, all in one transaction.
 
@@ -249,6 +252,13 @@ stored and reused until the data is reloaded.
   expected case is always `low` (`RISK_PERCENTILES`, `RISK_MIN_CASES` in `.env`). Each forecast
   returns the thresholds it used. These are placeholders until the health team sets official ones.
 
+**Replay (`as_of=YYYY-WW`)** — Every area route and `/dashboard` accept an epidemiological
+week and answer as the system would have that week: history stops there, forecasts use only
+data observed up to it, and each forecast point includes `actual_cases` when the outcome is
+known. `in_sample: true` marks forecasts whose target weeks were in the model's training period
+(the model saw those outcomes). Without `as_of`, forecasts use the latest complete week (all
+neighborhoods reported and the model's input exists).
+
 **City values:** `cases` is the total over all neighborhoods; `mean_per_neighborhood` is the
 paper's unit (what the model predicts); `incidence_per_100k` uses 2010 Census population.
 
@@ -270,7 +280,7 @@ The `…/previsao` routes accept:
 Each forecast point has `predicted_cases` (cases in the area that week), `lower_bound` /
 `upper_bound` (mean ± 1 standard deviation across the model's repetitions — their
 disagreement, not a calibrated interval) and, for the city, `mean_per_neighborhood`.
-`/dashboard` accepts `input_type` and `lag`.
+`/dashboard` accepts `input_type`, `lag` and `as_of`. All of them accept `as_of`.
 
 ### Error responses
 
@@ -278,7 +288,7 @@ disagreement, not a calibrated interval) and, for the city, `mean_per_neighborho
 |---|---|
 | `401` | Missing or expired token |
 | `404` | Neighborhood or district not found |
-| `422` | Invalid query parameter, horizon beyond what the lag allows, or gaps in the data |
+| `422` | Invalid query parameter, horizon beyond what the lag allows, gaps in the data, or an incomplete `as_of` week |
 | `503` | `.mat` file missing, or no trained model for the requested configuration |
 
 ---

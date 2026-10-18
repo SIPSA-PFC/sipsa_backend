@@ -58,12 +58,15 @@ class DashboardService:
                 ))
         alerts.sort(key=lambda a: (_ORDER[a.risk_level], a.name))
 
+        city = await self.areas.area("city")
+        actual = await self.forecasts.actual_cases(city, [w for _, w in city_rows])
         city_points = [
             ForecastPointOut(horizon=f.horizon, week_start=w.start_date, epi_year=w.epi_year, epi_week=w.epi_week,
                              predicted_cases=round(f.predicted, 2),
                              lower_bound=None if f.lower is None else round(f.lower, 2),
                              upper_bound=None if f.upper is None else round(f.upper, 2),
-                             mean_per_neighborhood=round(f.predicted / n_neigh, 3) if n_neigh else None)
+                             mean_per_neighborhood=round(f.predicted / n_neigh, 3) if n_neigh else None,
+                             actual_cases=actual.get(w.start_date))
             for f, w in city_rows
         ]
         return DashboardOut(
@@ -72,5 +75,6 @@ class DashboardService:
             total_cases_this_week=int(sum(this_week.values())),
             neighborhoods_on_alert=len(alerts),
             mean_predicted_next_weeks=round(float(np.mean([p.predicted_cases for p in city_points])), 2),
+            in_sample=await self.forecasts.in_sample(run, city_rows),
             city_forecast=city_points, alerts=alerts, map=bubbles,
         )

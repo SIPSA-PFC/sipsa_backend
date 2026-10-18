@@ -57,6 +57,16 @@ def add_weeks(epi_year: int, epi_week: int, n: int) -> tuple[int, int]:
     return from_date(week_start(epi_year, epi_week) + timedelta(weeks=n))
 
 
+def parse_iso_label(label: str) -> tuple[int, int]:
+    """'2019-30' → (2019, 30), the format used in API query parameters."""
+    m = re.match(r"^(\d{4})-(\d{1,2})$", str(label).strip())
+    if not m:
+        raise ValueError(f"expected an epidemiological week as YYYY-WW, got {label!r}")
+    year, week = int(m.group(1)), int(m.group(2))
+    week_start(year, week)
+    return year, week
+
+
 def parse_label(label: str) -> tuple[int, int]:
     """'S201601' or '201601' → (2016, 1). Raises ValueError otherwise."""
     m = _LABEL.match(str(label).strip())

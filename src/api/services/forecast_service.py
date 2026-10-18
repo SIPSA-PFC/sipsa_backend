@@ -7,9 +7,19 @@ City: the LSTM's own output (method 'model'), converted from mean cases per
 neighborhood to a city total.
 
 District / neighborhood: the paper's model is city-wide only, so these are
-the city forecast multiplied by the area's share of the city's cases during
-the model's training period (method 'split'). It is an estimate that
+the city forecast multiplied by the area's share of the city's cases in all
+weeks observed up to the as-of week (method 'split'). It is an estimate that
 assumes each area keeps its usual share; responses say so through `method`.
+
+As-of week: by default the latest complete week (every neighborhood
+reported and the model's input exists); newly ingested partial weeks are
+skipped until complete.
+
+Replay: every forecast can be made "as of" an earlier week. Only data
+observed up to that week is used (model inputs, shares, risk history), and
+each point carries the cases actually observed, when known. If a target
+week falls in the model's training period, `in_sample` is true: the model
+saw that outcome, so the comparison is not a fair test.
 
 Risk: compares the highest forecast week with the area's own weekly history
 up to the as-of week (settings.risk_percentiles), so the same rule works for
@@ -89,14 +99,31 @@ class ForecastService:
         history = [r.cases for r in await self.areas.weekly_cases(area, until=as_of_row.start_date)]
         peak = max(f.predicted for f, _ in rows[:n_weeks])
         level, thresholds = relative_risk(history, peak)
+        actual = await self.actual_cases(area, [w for _, w in rows[:n_weeks]])
         return self._response(run, area, as_of_row, rows[:n_weeks], level, thresholds,
-                              n_neighborhoods=n_neigh if scope == "city" else None)
+                              n_neighborhoods=n_neigh if scope == "city" else None,
+                              actual=actual, in_sample=await self.in_sample(run, rows[:n_weeks]))
+
+    async def actual_cases(self, area: Area, weeks: list[EpiWeek]) -> dict:
+        """Observed cases in the area for the given weeks (only weeks that have data)."""
+        if not weeks:
+            return {}
+        last = max(w.start_date for w in weeks)
+        wanted = {w.start_date for w in weeks}
+        return {r.start_date: int(r.cases) for r in await self.areas.weekly_cases(area, until=last)
+                if r.start_date in wanted and r.cases is not None}
+
+    async def in_sample(self, run: RunInfo, rows: list) -> bool:
+        """True if any target week is inside the model's training period."""
+        mr = await self.db.get(ModelRun, run.model_run_id)
+        train_end = (await self.db.get(EpiWeek, mr.train_to_week_id)).start_date
+        return any(w.start_date <= train_end for _, w in rows)
 
     async def city_and_neighborhoods(self, input_type: str, lag: int, as_of: tuple[int, int] | None = None):
         """City rows plus split rows for every neighborhood, for the dashboard."""
         run = self._run(input_type, lag)
         as_of_row, n_neigh, city_rows = await self._city_rows(run, as_of)
-        shares = await self._shares(run)
+        shares = await self._shares(as_of_row)
         out = {}
         for n in await self.areas.neighborhoods():
             area = Area("neighborhood", n.Neighborhood.id, n.Neighborhood.name, (n.Neighborhood.id,), n.population)
@@ -129,13 +156,41 @@ class ForecastService:
                        DengueCase.case_count.isnot(None)))
         return (await self.db.execute(stmt)).scalar_one()
 
+    async def _complete_weeks(self, series: ml_data.CitySeries, input_type: str) -> tuple[list[bool], list[str]]:
+        """
+        Which weeks can serve as an as-of week: every neighborhood reported
+        cases and the model's input series has a value. Newly ingested weeks
+        are often partial; a city mean over a few neighborhoods would mislead.
+        """
+        city = await self.areas.area("city")
+        reporting = {(r.epi_year, r.epi_week): r.reporting for r in await self.areas.weekly_cases(city)}
+        n_total = len(city.neighborhood_ids)
+        x = series.series(input_type)
+        complete, why = [], []
+        for i, w in enumerate(series.weeks):
+            problems = []
+            if reporting.get(w, 0) < n_total:
+                problems.append(f"{reporting.get(w, 0)} of {n_total} neighborhoods reported cases")
+            if np.isnan(x[i]):
+                problems.append(f"no {input_type.upper()} value")
+            complete.append(not problems)
+            why.append("; ".join(problems))
+        return complete, why
+
     async def _city_rows(self, run: RunInfo, as_of: tuple[int, int] | None):
-        """City forecast at the as-of week (default: latest), computing and storing it if needed."""
+        """City forecast at the as-of week (default: latest complete week), computed and stored if needed."""
         series = await ml_data.load_from_db(self.db)
+        complete, why = await self._complete_weeks(series, run.input_type)
         if as_of is None:
-            as_of_index = len(series.weeks) - 1
+            if not any(complete):
+                raise HTTPException(status_code=422, detail="No complete week to forecast from.")
+            as_of_index = max(i for i, ok in enumerate(complete) if ok)
         elif as_of in series.weeks:
             as_of_index = series.weeks.index(as_of)
+            if not complete[as_of_index]:
+                raise HTTPException(status_code=422, detail=(
+                    f"Epidemiological week {as_of[0]}-{as_of[1]:02d} is incomplete ({why[as_of_index]}); "
+                    "pick an earlier week or omit as_of to use the latest complete one."))
         else:
             raise HTTPException(status_code=422, detail=f"No data for epidemiological week {as_of[0]}-{as_of[1]:02d}.")
         as_of_row = await self.weeks.get(*series.weeks[as_of_index])
@@ -168,12 +223,10 @@ class ForecastService:
         await self.db.commit()
         return as_of_row, n_neigh, [(r, target_rows[t]) for r, t in zip(rows, targets)]
 
-    async def _shares(self, run: RunInfo) -> dict[int, float]:
-        """Each neighborhood's share of city cases during the model's training weeks."""
-        mr = await self.db.get(ModelRun, run.model_run_id)
-        start = (await self.db.get(EpiWeek, mr.train_from_week_id)).start_date
-        end = (await self.db.get(EpiWeek, mr.train_to_week_id)).start_date
-        totals = await self.areas.cases_by_neighborhood(start, end)
+    async def _shares(self, as_of_row: EpiWeek) -> dict[int, float]:
+        """Each neighborhood's share of city cases in all weeks observed up to the as-of week."""
+        first = (await self.db.execute(select(func.min(EpiWeek.start_date)))).scalar_one()
+        totals = await self.areas.cases_by_neighborhood(first, as_of_row.start_date)
         city = sum(totals.values())
         return {nid: (v / city if city else 0.0) for nid, v in totals.items()}
 
@@ -184,7 +237,7 @@ class ForecastService:
         stored = await self.forecasts.get(run.model_run_id, as_of_row.id, area.scope, district_id, neighborhood_id)
         if len(stored) >= len(city_rows):
             return stored
-        shares = shares if shares is not None else await self._shares(run)
+        shares = shares if shares is not None else await self._shares(as_of_row)
         share = sum(shares.get(n, 0.0) for n in area.neighborhood_ids)
         now = datetime.now(timezone.utc)
         rows = [
@@ -202,7 +255,8 @@ class ForecastService:
         return rows
 
     def _response(self, run: RunInfo, area: Area, as_of: EpiWeek, rows: list, level: str,
-                  thresholds: RiskThresholdsOut, n_neighborhoods: int | None) -> ForecastOut:
+                  thresholds: RiskThresholdsOut, n_neighborhoods: int | None,
+                  actual: dict | None = None, in_sample: bool = False) -> ForecastOut:
         points = [
             ForecastPointOut(
                 horizon=f.horizon, week_start=week.start_date, epi_year=week.epi_year, epi_week=week.epi_week,
@@ -210,6 +264,7 @@ class ForecastService:
                 lower_bound=None if f.lower is None else round(f.lower, 2),
                 upper_bound=None if f.upper is None else round(f.upper, 2),
                 mean_per_neighborhood=round(f.predicted / n_neighborhoods, 3) if n_neighborhoods else None,
+                actual_cases=(actual or {}).get(week.start_date),
             )
             for f, week in rows
         ]
@@ -217,6 +272,7 @@ class ForecastService:
             scope=area.scope, area_id=area.id, area_name=area.name, input_type=run.input_type, lag=run.lag,
             max_horizon=run.max_horizon, model_version=run.model_version, method=rows[0][0].method,
             as_of=WeekOut(epi_year=as_of.epi_year, epi_week=as_of.epi_week, week_start=as_of.start_date),
-            generated_at=_utc(rows[0][0].generated_at), risk_level=level, risk_thresholds=thresholds,
+            generated_at=_utc(rows[0][0].generated_at), in_sample=in_sample,
+            risk_level=level, risk_thresholds=thresholds,
             series=points,
         )

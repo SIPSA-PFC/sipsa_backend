@@ -169,6 +169,7 @@ class ForecastPointOut(BaseModel):
     lower_bound:           Optional[float] = None
     upper_bound:           Optional[float] = None
     mean_per_neighborhood: Optional[float] = None   # the model's own unit (city scope only)
+    actual_cases:          Optional[int] = None     # observed cases that week, when already known
 
 
 class RiskThresholdsOut(BaseModel):
@@ -195,6 +196,8 @@ class ForecastOut(BaseModel):
     method:        str              # "model" | "split"
     as_of:         WeekOut
     generated_at:  datetime
+    in_sample:     bool = False     # True if a target week was in the model's training period
+                                    # (the model saw that outcome; not a fair test)
     risk_level:    str              # "high" | "moderate" | "low", from the highest forecast week
     risk_thresholds: Optional[RiskThresholdsOut] = None
     series:        list[ForecastPointOut]
@@ -234,6 +237,7 @@ class DashboardOut(BaseModel):
     total_cases_this_week:     int
     neighborhoods_on_alert:    int
     mean_predicted_next_weeks: float          # city total, mean over the forecast weeks
+    in_sample:                 bool = False   # see ForecastOut.in_sample
     city_forecast:             list[ForecastPointOut]
     alerts:                    list[AlertOut]
     map:                       list[MapBubbleOut]
