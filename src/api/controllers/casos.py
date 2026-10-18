@@ -13,8 +13,8 @@ router = APIRouter(prefix="/casos", tags=["casos"])
 @router.get("/{neighborhood_id}", response_model=DengueCaseSeriesOut)
 async def get_casos(
     neighborhood_id: int,
-    year_from: Optional[int] = Query(default=None),
-    year_to:   Optional[int] = Query(default=None),
+    year_from: Optional[int] = Query(default=None, description="First epidemiological year to include"),
+    year_to:   Optional[int] = Query(default=None, description="Last epidemiological year to include"),
     db: AsyncSession = Depends(get_db),
 ):
     nr = NeighborhoodRepository(db)
@@ -29,9 +29,9 @@ async def get_casos(
             DengueCaseOut(
                 neighborhood_id = r.neighborhood_id,
                 week_start      = r.week_start,
-                iso_year        = r.iso_year,
-                iso_week        = r.iso_week,
-                case_count      = float(r.case_count) if r.case_count is not None else None,
+                epi_year        = r.epi_year,
+                epi_week        = r.epi_week,
+                case_count      = r.case_count,
             ) for r in rows
         ],
     )

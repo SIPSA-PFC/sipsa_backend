@@ -1,153 +1,169 @@
 """
 etl/migrate.py
 --------------
-One-time migration: reads original .xlsx and .mat files into the clean
-relational schema (neighborhood → dengue_case / ovitrap_reading).
+Loads the original research files into the database.
+
+Prerequisite: the schema must exist —  run  `alembic upgrade head`  first.
 
 Run: python -m src.etl.migrate
 """
 from __future__ import annotations
+
 import asyncio
-from datetime import date, timedelta
+import logging
+from datetime import timedelta
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import scipy.io as sio
+from sqlalchemy import inspect, select
 
-from src.core.database import AsyncSessionLocal, engine, Base
-from src.api.models.db_models import Neighborhood, Socioeconomic, DengueCase, OvitrapReading
+from src.api.models.db_models import (
+    DengueCase, EpiWeek, Neighborhood, OvitrapReading, Socioeconomic,
+)
+from src.core import epiweek
+from src.core.database import AsyncSessionLocal, engine
+
+log = logging.getLogger("sipsa.etl")
 
 ROOT     = Path(__file__).resolve().parent.parent.parent
 DATA_RAW = ROOT / "data" / "raw"
 
-WEEK_ZERO = date(2016, 1, 4)   # first Monday of the dataset
+REQUIRED_TABLES = {"epi_week", "neighborhood", "socioeconomic", "dengue_case", "ovitrap_reading"}
 
 
-def _week_date(index: int) -> date:
-    return WEEK_ZERO + timedelta(weeks=index)
+# =============================================================================
+# Readers
+# =============================================================================
+
+def _load_dengue() -> tuple[pd.DataFrame, list[tuple[int, int]]]:
+    """
+    Dados_Modelagem.xlsx, sheet 'Casos de Dengue': one row per neighborhood,
+    one column per epidemiological week (S201601 … S201952), whole case counts.
+    """
+    df = pd.read_excel(DATA_RAW / "Dados_Modelagem.xlsx", sheet_name="Casos de Dengue", index_col=0)
+    df.index = [str(n).strip() for n in df.index]
+    weeks = [epiweek.parse_label(c) for c in df.columns]
+    return df, weeks
 
 
-def _iso(d: date) -> tuple[int, int]:
-    iso = d.isocalendar()
-    return iso[0], iso[1]
+def _load_egg_indices() -> tuple[np.ndarray, np.ndarray]:
+    """Rearranged_Data.mat EggIndice_Agregated (36, 208, 2): [:, :, 0] OPI, [:, :, 1] EDI."""
+    mat = sio.loadmat(str(DATA_RAW / "Rearranged_Data.mat"), squeeze_me=True)
+    egg = mat["EggIndice_Agregated"]
+    return egg[:, :, 0], egg[:, :, 1]
 
 
 def _load_socio() -> pd.DataFrame:
-    df = pd.read_excel(str(DATA_RAW / "DADOS GERAIS_01.xlsx"), sheet_name=1, header=0)
-    df.columns = ["name", "income_index", "population"] + list(df.columns[3:])
-    df["name"]         = df["name"].astype(str).str.strip()
-    df["population"]   = pd.to_numeric(df["population"],   errors="coerce").fillna(0).astype(int)
-    df["income_index"] = pd.to_numeric(df["income_index"], errors="coerce")
-    return df[["name", "population", "income_index"]]
+    """DADOS GERAIS_01.xlsx, sheet 'Renda por Bairro' (2010 Census)."""
+    df = pd.read_excel(DATA_RAW / "DADOS GERAIS_01.xlsx", sheet_name="Renda por Bairro")
+    df.columns = ["name", "total_income_brl", "population"] + list(df.columns[3:])
+    df["name"] = df["name"].astype(str).str.strip()
+    df["population"]       = pd.to_numeric(df["population"], errors="coerce")
+    df["total_income_brl"] = pd.to_numeric(df["total_income_brl"], errors="coerce")
+    return df[["name", "population", "total_income_brl"]]
 
 
-def _load_dengue() -> tuple[np.ndarray, list[str]]:
-    df    = pd.read_excel(str(DATA_RAW / "Dados_Modelagem.xlsx"), sheet_name=3, index_col=0, header=0)
-    names = [str(n).strip() for n in df.index.tolist()]
-    return df.values.astype(float).T, names   # (208, 36)
+def _none_if_nan(value) -> float | None:
+    return None if value is None or np.isnan(value) else float(value)
 
 
-def _load_edi() -> np.ndarray:
-    mat = sio.loadmat(str(DATA_RAW / "Rearranged_Data.mat"), squeeze_me=True)
-    return mat["EggIndice_Agregated"][:, :, 1].T   # (208, 36) EDI
+# =============================================================================
+# Load
+# =============================================================================
 
-
-def _load_opi() -> np.ndarray:
-    mat = sio.loadmat(str(DATA_RAW / "Rearranged_Data.mat"), squeeze_me=True)
-    return mat["EggIndice_Agregated"][:, :, 0].T   # (208, 36) OPI
+async def _assert_schema() -> None:
+    async with engine.connect() as conn:
+        tables = await conn.run_sync(lambda c: set(inspect(c).get_table_names()))
+    missing = REQUIRED_TABLES - tables
+    if missing:
+        raise SystemExit(
+            f"Database schema missing tables {sorted(missing)}. "
+            "Run  alembic upgrade head  before the ETL."
+        )
 
 
 async def run() -> None:
-    print("ETL — starting …")
-    missing = [f for f in [
-        DATA_RAW / "Dados_Modelagem.xlsx",
-        DATA_RAW / "DADOS GERAIS_01.xlsx",
-        DATA_RAW / "Rearranged_Data.mat",
-    ] if not f.exists()]
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    missing = [f for f in ("Dados_Modelagem.xlsx", "DADOS GERAIS_01.xlsx", "Rearranged_Data.mat")
+               if not (DATA_RAW / f).exists()]
     if missing:
-        for f in missing: print(f"  ✗ Missing: {f}")
-        raise FileNotFoundError("Copy missing files to data/raw/ and retry.")
+        raise SystemExit(f"Missing files in {DATA_RAW}: {missing}")
+    await _assert_schema()
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    print("✓ Tables created")
-
-    dengue_mat, names = _load_dengue()
-    edi_mat           = _load_edi()
-    opi_mat           = _load_opi()
-    socio_df          = _load_socio()
-    n_weeks           = dengue_mat.shape[0]
+    dengue_df, weeks = _load_dengue()
+    opi_mat, edi_mat = _load_egg_indices()
+    socio_df         = _load_socio()
+    names            = list(dengue_df.index)
 
     async with AsyncSessionLocal() as session:
-        # ── Neighborhoods ─────────────────────────────────────────────────────
-        for name in names:
-            session.add(Neighborhood(name=name))
+        # ── Epidemiological weeks ─────────────────────────────────────────────
+        week_rows = []
+        for y, w in weeks:
+            start = epiweek.week_start(y, w)
+            week_rows.append(EpiWeek(epi_year=y, epi_week=w, start_date=start,
+                                     end_date=start + timedelta(days=6)))
+        session.add_all(week_rows)
         await session.flush()
+        log.info("%d epidemiological weeks (%s to %s)", len(week_rows),
+                 week_rows[0].start_date, week_rows[-1].end_date)
 
-        from sqlalchemy import select
-        result = await session.execute(select(Neighborhood))
-        name_to_id = {n.name: n.id for n in result.scalars().all()}
-        print(f"✓ {len(name_to_id)} neighborhoods")
+        # ── Neighborhoods ─────────────────────────────────────────────────────
+        session.add_all([Neighborhood(name=n) for n in names])
+        await session.flush()
+        name_to_id = {n.name: n.id for n in (await session.execute(select(Neighborhood))).scalars()}
+        log.info("%d neighborhoods", len(name_to_id))
 
-        # ── Socioeconomic ─────────────────────────────────────────────────────
+        # ── Socioeconomic (2010 Census) ───────────────────────────────────────
+        n_socio = 0
         for _, row in socio_df.iterrows():
             nid = name_to_id.get(row["name"])
-            if nid is None: continue
+            if nid is None:
+                continue
             session.add(Socioeconomic(
-                neighborhood_id = nid,
-                reference_year  = 2016,
-                population      = int(row["population"]),
-                income_index    = float(row["income_index"]) if pd.notna(row["income_index"]) else None,
+                neighborhood_id  = nid,
+                reference_year   = 2010,
+                population       = None if pd.isna(row["population"]) else int(row["population"]),
+                total_income_brl = _none_if_nan(row["total_income_brl"]),
             ))
+            n_socio += 1
         await session.flush()
-        print("✓ Socioeconomic data")
+        log.info("%d socioeconomic rows", n_socio)
 
         # ── Dengue cases ──────────────────────────────────────────────────────
         dengue_rows = []
-        for wi in range(n_weeks):
-            d = _week_date(wi)
-            y, w = _iso(d)
+        for wi, wk in enumerate(week_rows):
             for ni, name in enumerate(names):
-                nid = name_to_id.get(name)
-                if nid is None: continue
-                val = dengue_mat[wi, ni]
+                val = dengue_df.iat[ni, wi]
                 dengue_rows.append(DengueCase(
-                    neighborhood_id = nid,
-                    week_start      = d,
-                    iso_year        = y,
-                    iso_week        = w,
-                    case_count      = None if np.isnan(val) else float(val),
+                    neighborhood_id = name_to_id[name],
+                    epi_week_id     = wk.id,
+                    case_count      = None if pd.isna(val) else int(val),
                 ))
         session.add_all(dengue_rows)
         await session.flush()
-        print(f"✓ {len(dengue_rows)} dengue_case rows")
+        log.info("%d dengue_case rows", len(dengue_rows))
 
         # ── Ovitrap readings ──────────────────────────────────────────────────
+        # NOTE: rows of EggIndice_Agregated are matched to neighborhoods by
+        # position here. fix/etl-alignment replaces this with a name-based match.
         ovitrap_rows = []
-        for wi in range(n_weeks):
-            d = _week_date(wi)
-            y, w = _iso(d)
+        for wi, wk in enumerate(week_rows):
             for ni, name in enumerate(names):
-                nid = name_to_id.get(name)
-                if nid is None: continue
-                opi = opi_mat[wi, ni]
-                edi = edi_mat[wi, ni]
                 ovitrap_rows.append(OvitrapReading(
-                    neighborhood_id = nid,
-                    week_start      = d,
-                    iso_year        = y,
-                    iso_week        = w,
-                    opi             = None if np.isnan(opi) else float(opi),
-                    edi             = None if np.isnan(edi) else float(edi),
+                    neighborhood_id = name_to_id[name],
+                    epi_week_id     = wk.id,
+                    opi             = _none_if_nan(opi_mat[ni, wi]),
+                    edi             = _none_if_nan(edi_mat[ni, wi]),
                 ))
         session.add_all(ovitrap_rows)
         await session.flush()
-        print(f"✓ {len(ovitrap_rows)} ovitrap_reading rows")
+        log.info("%d ovitrap_reading rows", len(ovitrap_rows))
 
         await session.commit()
 
-    print("\n✓ Migration complete. DB is now the source of truth.")
+    log.info("Migration complete.")
 
 
 if __name__ == "__main__":

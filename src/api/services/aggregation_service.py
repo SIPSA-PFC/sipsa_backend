@@ -18,7 +18,7 @@ class AggregationService:
         """
         Returns city-wide dengue and EDI series aligned on the same ISO week index.
 
-        Keys: dengue (ndarray), edi (ndarray), iso_years, iso_weeks, week_starts
+        Keys: dengue (ndarray), edi (ndarray), epi_years, epi_weeks, week_starts
         """
         dengue_rows = await self.dengue_repo.get_city_wide_mean()
         edi_rows    = await self.ovitrap_repo.get_city_wide_edi_mean()
@@ -27,22 +27,22 @@ class AggregationService:
             raise ValueError("No dengue data in database. Run the ETL first.")
 
         dengue_s = pd.Series(
-            {(r["iso_year"], r["iso_week"]): r["mean_cases"] for r in dengue_rows}
+            {(r["epi_year"], r["epi_week"]): r["mean_cases"] for r in dengue_rows}
         ).sort_index()
 
         edi_s = pd.Series(
-            {(r["iso_year"], r["iso_week"]): r["mean_edi"] for r in edi_rows}
+            {(r["epi_year"], r["epi_week"]): r["mean_edi"] for r in edi_rows}
         ).sort_index()
 
         df = pd.DataFrame({"dengue": dengue_s, "edi": edi_s})
         df["edi"] = df["edi"].fillna(df["edi"].mean())
 
-        date_map = {(r["iso_year"], r["iso_week"]): r["week_start"] for r in dengue_rows}
+        date_map = {(r["epi_year"], r["epi_week"]): r["week_start"] for r in dengue_rows}
 
         return {
             "dengue":      df["dengue"].to_numpy(dtype=float),
             "edi":         df["edi"].to_numpy(dtype=float),
-            "iso_years":   [idx[0] for idx in df.index],
-            "iso_weeks":   [idx[1] for idx in df.index],
+            "epi_years":   [idx[0] for idx in df.index],
+            "epi_weeks":   [idx[1] for idx in df.index],
             "week_starts": [date_map.get((y, w)) for y, w in df.index],
         }

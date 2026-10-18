@@ -14,8 +14,8 @@ router = APIRouter(prefix="/ovitrampas", tags=["ovitrampas"])
 @router.get("/{neighborhood_id}", response_model=OvitrapSeriesOut)
 async def get_ovitrampas(
     neighborhood_id: int,
-    year_from: Optional[int] = Query(default=None),
-    year_to:   Optional[int] = Query(default=None),
+    year_from: Optional[int] = Query(default=None, description="First epidemiological year to include"),
+    year_to:   Optional[int] = Query(default=None, description="Last epidemiological year to include"),
     db: AsyncSession = Depends(get_db),
 ):
     nr = NeighborhoodRepository(db)
@@ -31,10 +31,10 @@ async def get_ovitrampas(
             OvitrapReadingOut(
                 neighborhood_id = r.neighborhood_id,
                 week_start      = r.week_start,
-                iso_year        = r.iso_year,
-                iso_week        = r.iso_week,
-                opi             = float(r.opi) if r.opi is not None else None,
-                edi             = float(r.edi) if r.edi is not None else None,
+                epi_year        = r.epi_year,
+                epi_week        = r.epi_week,
+                opi             = r.opi,
+                edi             = r.edi,
             ) for r in rows
         ],
     )

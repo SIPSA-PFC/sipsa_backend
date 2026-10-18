@@ -35,7 +35,7 @@ class PredictionRepository:
             .where(ModelPrediction.model_version   == model_version)
             .where(ModelPrediction.input_type      == input_type)
             .where(ModelPrediction.lag             == lag)
-            .order_by(ModelPrediction.iso_year, ModelPrediction.iso_week)
+            .order_by(ModelPrediction.epi_year, ModelPrediction.epi_week)
         )
         return result.scalars().all()
 

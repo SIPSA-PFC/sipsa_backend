@@ -3,9 +3,8 @@ api/services/prediction_service.py
 Orchestrates: validate → aggregate → LSTM → cache → return.
 """
 from __future__ import annotations
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import HTTPException, status
-from isoweek import Week
 
 from src.api.models.db_models import ModelPrediction
 from src.api.models.schemas import PredictionOut, PredictionPointOut
@@ -14,6 +13,7 @@ from src.api.repositories.dengue_repository import DengueRepository
 from src.api.repositories.ovitrap_repository import OvitrapRepository
 from src.api.services.validation_service import ValidationService
 from src.api.services.aggregation_service import AggregationService
+from src.core import epiweek
 from src.ml.inference import ModelNotReadyError, run_prediction
 
 MODEL_VERSION = "sipsa-lstm-v1"
@@ -25,9 +25,10 @@ def _risk_level(mean_cases: float) -> str:
     return "low"
 
 
-def _next_week(iso_year: int, iso_week: int):
-    w = Week(iso_year, iso_week) + 1
-    return w.year, w.week, w.monday()
+def _next_week(epi_year: int, epi_week: int):
+    """Following epidemiological week: (epi_year, epi_week, start Sunday)."""
+    ny, nw = epiweek.add_weeks(epi_year, epi_week, 1)
+    return ny, nw, epiweek.week_start(ny, nw)
 
 
 class PredictionService:
@@ -85,26 +86,26 @@ class PredictionService:
             ) from exc
 
         # 5. Build future week rows
-        last_year = series["iso_years"][-1]
-        last_week = series["iso_weeks"][-1]
+        last_year = series["epi_years"][-1]
+        last_week = series["epi_weeks"][-1]
         rows: list[ModelPrediction] = []
 
         for i in range(n_weeks):
-            y = last_year if i == 0 else rows[-1].iso_year
-            w = last_week if i == 0 else rows[-1].iso_week
+            y = last_year if i == 0 else rows[-1].epi_year
+            w = last_week if i == 0 else rows[-1].epi_week
             ny, nw, nd = _next_week(y, w)
             rows.append(ModelPrediction(
                 neighborhood_id = neighborhood_id,
                 week_start      = nd,
-                iso_year        = ny,
-                iso_week        = nw,
+                epi_year        = ny,
+                epi_week        = nw,
                 predicted_cases = float(result["mean"][i]),
                 lower_bound     = float(result["lower"][i]),
                 upper_bound     = float(result["upper"][i]),
                 model_version   = MODEL_VERSION,
                 input_type      = input_type,
                 lag             = lag,
-                generated_at    = datetime.utcnow(),
+                generated_at    = datetime.now(timezone.utc),
             ))
 
         # 6. Persist cache
@@ -121,13 +122,13 @@ class PredictionService:
             input_type        = input_type,
             lag               = lag,
             model_version     = MODEL_VERSION,
-            generated_at      = rows[0].generated_at or datetime.utcnow(),
+            generated_at      = rows[0].generated_at or datetime.now(timezone.utc),
             risk_level        = _risk_level(mean),
             series=[
                 PredictionPointOut(
                     week_start      = r.week_start,
-                    iso_year        = r.iso_year,
-                    iso_week        = r.iso_week,
+                    epi_year        = r.epi_year,
+                    epi_week        = r.epi_week,
                     predicted_cases = float(r.predicted_cases),
                     lower_bound     = float(r.lower_bound) if r.lower_bound is not None else None,
                     upper_bound     = float(r.upper_bound) if r.upper_bound is not None else None,

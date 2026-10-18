@@ -5,13 +5,16 @@ Pydantic schemas — the typed contract between FastAPI and the Next.js frontend
 
 Design rule: every field name here is what the frontend will receive in JSON.
 The frontend dev should import these types as-is to TypeScript interfaces.
+
+Weeks are Brazilian epidemiological weeks (epi_year, epi_week), Sunday to
+Saturday; week_start is the Sunday. See src/core/epiweek.py.
 """
 
 from __future__ import annotations
 from datetime import date, datetime
 from enum import IntEnum
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 # =============================================================================
@@ -41,7 +44,7 @@ class NeighborhoodOut(BaseModel):
     latitude:  Optional[float] = None
     longitude: Optional[float] = None
 
-    class Config: from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # =============================================================================
@@ -50,12 +53,12 @@ class NeighborhoodOut(BaseModel):
 
 class DengueCaseOut(BaseModel):
     neighborhood_id: int
-    week_start:      date
-    iso_year:        int
-    iso_week:        int
-    case_count:      Optional[float] = None
+    week_start:      date            # Sunday that starts the epidemiological week
+    epi_year:        int
+    epi_week:        int
+    case_count:      Optional[int] = None
 
-    class Config: from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DengueCaseSeriesOut(BaseModel):
@@ -73,12 +76,12 @@ class DengueCaseSeriesOut(BaseModel):
 class OvitrapReadingOut(BaseModel):
     neighborhood_id: int
     week_start:      date
-    iso_year:        int
-    iso_week:        int
+    epi_year:        int
+    epi_week:        int
     opi:             Optional[float] = None
     edi:             Optional[float] = None
 
-    class Config: from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class OvitrapSeriesOut(BaseModel):
@@ -94,8 +97,8 @@ class OvitrapSeriesOut(BaseModel):
 
 class PredictionPointOut(BaseModel):
     week_start:       date
-    iso_year:         int
-    iso_week:         int
+    epi_year:         int
+    epi_week:         int
     predicted_cases:  float
     lower_bound:      Optional[float] = None
     upper_bound:      Optional[float] = None
