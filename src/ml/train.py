@@ -9,7 +9,7 @@ municipality of Natal, RN-Brazil. Two predictor types are tested
 
 Usage
 -----
-    python src/train.py
+    python -m src.ml.train
 
 Outputs
 -------
@@ -43,7 +43,7 @@ except ImportError:
     raise
 
 # ── project paths ─────────────────────────────────────────────────────────────
-ROOT        = Path(__file__).resolve().parent.parent
+ROOT        = Path(__file__).resolve().parent.parent.parent   # repo root (src/ml/ -> src/ -> root)
 DATA_RAW    = ROOT / "data" / "raw"
 DATA_MODELS = ROOT / "data" / "models"
 DATA_MODELS.mkdir(parents=True, exist_ok=True)

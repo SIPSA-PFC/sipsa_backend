@@ -9,8 +9,26 @@ The frontend dev should import these types as-is to TypeScript interfaces.
 
 from __future__ import annotations
 from datetime import date, datetime
+from enum import IntEnum
 from typing import Optional
 from pydantic import BaseModel
+
+
+# =============================================================================
+# Model configuration
+# =============================================================================
+
+class Lag(IntEnum):
+    """
+    Past-sample windows the LSTM was trained with (MATLAB NBackSamples = [1 3:6]).
+    1 -> i-1;  3 -> i-3..i-1;  4 -> i-4..i-2;  5 -> i-5..i-3;  6 -> i-6..i-4.
+    Any other value is invalid: lag=2 would include week i itself (target leakage).
+    """
+    ONE   = 1
+    THREE = 3
+    FOUR  = 4
+    FIVE  = 5
+    SIX   = 6
 
 
 # =============================================================================

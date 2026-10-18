@@ -10,25 +10,32 @@ The API starts without model weights. The /predicao endpoint will return
 503 if weights are not available. All other endpoints work immediately.
 """
 
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.core.config import settings
 from src.api.controllers import predicao, casos, ovitrampas, auth, resultados
+from src.ml.inference import is_model_ready, load_weights
+
+logger = logging.getLogger("sipsa")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Try to load weights but do not block startup if they are missing.
-    # /predicao will return 503 until weights exist.
-    try:
-        from src.ml.inference import load_weights
-        load_weights(settings.model_weights_path)
-        print("✓ Model weights loaded.")
-    except FileNotFoundError:
-        print("⚠  Model weights not found — /predicao will return 503.")
-        print("   To generate weights run:  python -m src.ml.train")
+    # Load weights without blocking startup if they are missing.
+    # load_weights() does not raise when the file is absent, so check the
+    # registry afterwards instead of relying on an exception.
+    load_weights(settings.model_weights_path)
+    if is_model_ready():
+        logger.info("Model weights loaded from %s", settings.model_weights_path)
+    else:
+        logger.warning(
+            "Model weights not found at %s; /predicao will return 503 until "
+            "they exist. Generate them with: python -m src.ml.train",
+            settings.model_weights_path,
+        )
     yield
 
 

@@ -184,7 +184,7 @@ python -m src.ml.train
 
 `/predicao/{id}` accepts:
 - `input_type`: `"dengue"` or `"edi"` (default: `"dengue"`)
-- `lag`: `1`, `3`, `4`, `5`, or `6` (default: `1`)
+- `lag`: `1`, `3`, `4`, `5`, or `6` (default: `1`) — any other value returns `422`
 - `n_weeks`: `1`–`12` (default: `4`)
 
 ### Error responses
@@ -193,7 +193,7 @@ python -m src.ml.train
 |---|---|
 | `401` | Missing or expired token |
 | `404` | Neighborhood not found |
-| `422` | No geolocation or insufficient history (< 6 weeks) |
+| `422` | Invalid query parameter, no geolocation, or insufficient history (< 6 weeks) |
 | `503` | `.mat` file missing or model weights not generated yet |
 
 ---
@@ -209,6 +209,10 @@ Five tables derived directly from the original research data.
 | `dengue_case` | Weekly case counts — one row per neighborhood per week |
 | `ovitrap_reading` | Weekly OPI + EDI — one row per neighborhood per week |
 | `model_prediction` | Cached LSTM output — regenerated automatically on request |
+
+> **Upgrading an existing database:** the `model_prediction` unique constraint now includes
+> `input_type` and `lag`. `create_all()` does not alter existing tables, so drop
+> `model_prediction` (it is only a cache) or delete the SQLite file and rerun `python -m src.etl.migrate`.
 
 `dengue_case` and `ovitrap_reading` are always queried separately — they represent different measurement systems and are never combined.
 

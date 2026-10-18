@@ -13,11 +13,14 @@ instead of reading from files, it accepts numpy arrays directly from
 the aggregation service.
 """
 
-from _future_ import annotations
+from __future__ import annotations
 
 import numpy as np
 from pathlib import Path
 from functools import lru_cache
+
+# Lag windows used in training (MATLAB NBackSamples = [1 3:6]).
+SUPPORTED_LAGS = (1, 3, 4, 5, 6)
 
 # TensorFlow is imported lazily so the rest of the API starts even if TF
 # is not installed — inference will raise a clear error only when called.
@@ -47,7 +50,7 @@ class _ModelRegistry:
     Holds the pre-trained weights in memory.
     Loaded once at startup via load_weights(); never retrained here.
     """
-    def _init_(self):
+    def __init__(self):
         self._weights: dict[int, list] = {}   # model_index → list of weight arrays
         self._input_sizes: dict[int, int] = {}
         self._loaded: bool = False
@@ -105,6 +108,11 @@ _registry = _ModelRegistry()
 def load_weights(npz_path: str | Path) -> None:
     """Called once from main.py lifespan — loads the registry."""
     _registry.load(npz_path)
+
+
+def is_model_ready() -> bool:
+    """True once load_weights() has found the weights file."""
+    return _registry.is_loaded
 
 
 # =============================================================================
@@ -206,6 +214,13 @@ def run_prediction(
             "Model weights are not loaded. "
             "Run  python -m src.ml.train  to generate them, then restart the API."
         )
+
+    # Only the trained lag windows are valid. lag=2 would build the window
+    # [0, 1, 2], and offset 0 is the target week itself (leakage).
+    if lag not in SUPPORTED_LAGS:
+        raise ValueError(f"lag must be one of {SUPPORTED_LAGS}, got {lag}")
+    if input_type not in ("dengue", "edi"):
+        raise ValueError(f"input_type must be 'dengue' or 'edi', got {input_type!r}")
 
     tf = _get_tf()
 

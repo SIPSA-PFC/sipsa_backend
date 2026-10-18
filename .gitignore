@@ -31,14 +31,20 @@ ENV/
 # =============================================================================
 .env
 .env.*
-!.env.example        # keep the example, never the real one
+# Keep the example, never the real one. (gitignore has no inline comments:
+# text after a pattern is part of the pattern, so this must be its own line.)
+!.env.example
 
 # =============================================================================
 # Data — never commit raw source files or databases
 # =============================================================================
-data/raw/
+# Ignore the folder *contents* (dir/*), not the folders (dir/): git cannot
+# re-include a file whose parent directory is excluded, so the .gitkeep
+# exceptions below only work with this form.
+data/raw/*
+data/models/*
+data/processed/*
 data/*.db
-data/models/
 
 # Keep the folder structure but not the files
 !data/raw/.gitkeep

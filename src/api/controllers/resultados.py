@@ -8,15 +8,16 @@ No database connection, no training, no authentication required.
 Safe to call immediately after starting the API.
 """
 
-from pathlib import Path
 from fastapi import APIRouter
+from src.core.config import ROOT
 from src.api.models.schemas import ResultadosOut
 from src.api.services.resultados_service import ResultadosService
 
 router = APIRouter(prefix="/resultados", tags=["resultados"])
 
-# Path to the pre-computed MATLAB eval results file
-_MAT_PATH = Path("data/raw/Models_1DLSTM_2022_02_04_EvalResults.mat")
+# Path to the pre-computed MATLAB eval results file, resolved from the repo
+# root so the API finds it regardless of the directory uvicorn is started from.
+_MAT_PATH = ROOT / "data" / "raw" / "Models_1DLSTM_2022_02_04_EvalResults.mat"
 
 
 @router.get("", response_model=ResultadosOut)

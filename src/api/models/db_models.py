@@ -110,9 +110,12 @@ class ModelPrediction(Base):
     """
     __tablename__ = "model_prediction"
     __table_args__ = (
+        # input_type and lag are part of the key: each configuration has its
+        # own forecast for the same weeks.
         UniqueConstraint(
-            "neighborhood_id", "iso_year", "iso_week", "model_version",
-            name="uq_prediction_version",
+            "neighborhood_id", "iso_year", "iso_week",
+            "model_version", "input_type", "lag",
+            name="uq_prediction_config",
         ),
         CheckConstraint("input_type IN ('dengue','edi')", name="chk_input_type"),
     )

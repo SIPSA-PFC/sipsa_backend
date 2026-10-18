@@ -12,7 +12,7 @@ and reproduces all three figures:
 
 Usage
 -----
-    python src/evaluate.py
+    python -m src.ml.evaluate
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
-from utils import (
+from src.ml.utils import (
     load_eval_results,
     compute_rmse,
     compute_r,
@@ -31,7 +31,7 @@ from utils import (
 )
 
 # ── paths ─────────────────────────────────────────────────────────────────────
-ROOT     = Path(__file__).resolve().parent.parent
+ROOT     = Path(__file__).resolve().parent.parent.parent   # repo root (src/ml/ -> src/ -> root)
 DATA_RAW = ROOT / "data" / "raw"
 OUT_IMG  = ROOT / "outputs"
 OUT_IMG.mkdir(parents=True, exist_ok=True)

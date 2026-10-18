@@ -4,6 +4,7 @@ Orchestrates: validate → aggregate → LSTM → cache → return.
 """
 from __future__ import annotations
 from datetime import datetime
+from fastapi import HTTPException, status
 from isoweek import Week
 
 from src.api.models.db_models import ModelPrediction
@@ -13,7 +14,7 @@ from src.api.repositories.dengue_repository import DengueRepository
 from src.api.repositories.ovitrap_repository import OvitrapRepository
 from src.api.services.validation_service import ValidationService
 from src.api.services.aggregation_service import AggregationService
-from src.ml.inference import run_prediction
+from src.ml.inference import ModelNotReadyError, run_prediction
 
 MODEL_VERSION = "sipsa-lstm-v1"
 
@@ -57,23 +58,31 @@ class PredictionService:
 
         neighborhood = await self.neighborhood_repo.get_by_id(neighborhood_id)
 
-        # 2. Return cache if available
+        # 2. Return cache if it covers the requested horizon.
+        #    The cache holds the longest horizon computed so far for this
+        #    configuration; shorter requests are served from its first weeks.
         cached = await self.prediction_repo.get_cached(neighborhood_id, MODEL_VERSION, input_type, lag)
-        if cached:
-            return self._format(cached, neighborhood.name, input_type, lag)
+        if len(cached) >= n_weeks:
+            return self._format(cached[:n_weeks], neighborhood.name, input_type, lag)
 
         # 3. Build input series
         series = await self.aggregation_svc.get_aligned_series()
 
-        # 4. Run LSTM
-        result = run_prediction(
-            dengue_series  = series["dengue"],
-            edi_series     = series["edi"],
-            input_type     = input_type,
-            lag            = lag,
-            n_future_weeks = n_weeks,
-            n_reps         = 5,
-        )
+        # 4. Run LSTM (503 if the model weights have not been generated yet)
+        try:
+            result = run_prediction(
+                dengue_series  = series["dengue"],
+                edi_series     = series["edi"],
+                input_type     = input_type,
+                lag            = lag,
+                n_future_weeks = n_weeks,
+                n_reps         = 5,
+            )
+        except ModelNotReadyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(exc),
+            ) from exc
 
         # 5. Build future week rows
         last_year = series["iso_years"][-1]
@@ -120,8 +129,8 @@ class PredictionService:
                     iso_year        = r.iso_year,
                     iso_week        = r.iso_week,
                     predicted_cases = float(r.predicted_cases),
-                    lower_bound     = float(r.lower_bound) if r.lower_bound else None,
-                    upper_bound     = float(r.upper_bound) if r.upper_bound else None,
+                    lower_bound     = float(r.lower_bound) if r.lower_bound is not None else None,
+                    upper_bound     = float(r.upper_bound) if r.upper_bound is not None else None,
                 )
                 for r in rows
             ],
