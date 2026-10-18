@@ -14,6 +14,9 @@ Weekly measurements (one row per neighborhood per epidemiological week)
     dengue_case       — notified cases (whole numbers)
     ovitrap_reading   — ovitrap positivity (OPI) and egg density (EDI)
 
+Access
+    users             — accounts that can log in to the API (role admin | user)
+
 Derived
     model_prediction  — cached LSTM output (replaced by `forecast` in
                         refactor/offline-inference)
@@ -25,8 +28,8 @@ stored and queried separately.
 from datetime import date, datetime
 
 from sqlalchemy import (
-    CheckConstraint, Date, DateTime, Float, ForeignKey, Integer, String, Text,
-    UniqueConstraint, func,
+    Boolean, CheckConstraint, Date, DateTime, Float, ForeignKey, Integer, String, Text,
+    UniqueConstraint, func, true,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -154,6 +157,31 @@ class OvitrapReading(Base):
 
     neighborhood: Mapped["Neighborhood"] = relationship(back_populates="ovitrap_readings")
     week:         Mapped["EpiWeek"]      = relationship()
+
+
+# =============================================================================
+# Access
+# =============================================================================
+
+USER_ROLES = ("admin", "user")
+
+
+class User(Base):
+    """
+    API account. Passwords are stored only as bcrypt hashes.
+    Table is 'users' because 'user' is a reserved word in PostgreSQL.
+    """
+    __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint("role IN ('admin', 'user')", name="role"),
+    )
+
+    id:            Mapped[int]             = mapped_column(Integer, primary_key=True)
+    username:      Mapped[str]             = mapped_column(String(80), nullable=False, unique=True)
+    password_hash: Mapped[str]             = mapped_column(String(100), nullable=False)
+    role:          Mapped[str]             = mapped_column(String(10), nullable=False, default="user", server_default="user")
+    is_active:     Mapped[bool]            = mapped_column(Boolean, nullable=False, default=True, server_default=true())
+    created_at:    Mapped[datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 # =============================================================================

@@ -72,8 +72,9 @@ source .venv/bin/activate      # Windows: .venv\Scripts\activate
 # 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Create your .env file
+# 3. Create your .env file and set SECRET_KEY (required, >= 32 characters)
 cp .env.example .env
+python -c "import secrets; print(secrets.token_urlsafe(48))"   # paste into SECRET_KEY=
 ```
 
 ---
@@ -117,7 +118,10 @@ alembic upgrade head
 # 2. Populate the database from raw files
 python -m src.etl.migrate
 
-# 3. Start the API
+# 3. Create the first account (prompts for a password)
+python -m src.cli create-user admin --role admin
+
+# 4. Start the API
 uvicorn src.main:app --reload --port 8000
 ```
 
@@ -173,12 +177,31 @@ python -m src.ml.train
 
 | Method | Endpoint | Auth | DB | Description |
 |---|---|---|---|---|
-| `POST` | `/auth/token` | No | Yes | Login, returns JWT |
+| `POST` | `/auth/token` | No | Yes | Login (form fields `username`, `password`), returns JWT |
+| `GET` | `/auth/me` | Yes | Yes | Logged-in username and role |
 | `GET` | `/resultados` | No | No | Pre-computed model metrics and predictions |
 | `GET` | `/casos/{id}` | Yes | Yes | Weekly dengue case series |
 | `GET` | `/ovitrampas/{id}` | Yes | Yes | Weekly OPI + EDI series |
 | `GET` | `/predicao/{id}` | Yes | Yes | LSTM forecast for next 1–12 weeks |
 | `GET` | `/health` | No | No | Health check |
+
+### Authentication
+
+Send the token from `/auth/token` as `Authorization: Bearer <token>`. Tokens expire after
+`ACCESS_TOKEN_EXPIRE_MINUTES` (default 60). Accounts have a role, `admin` or `user`; both
+currently have the same access, and `require_role(...)` in `src/api/controllers/auth.py`
+restricts a route when that changes.
+
+Manage accounts from the command line (passwords are prompted, never stored in files):
+
+```bash
+python -m src.cli create-user NAME [--role admin|user]
+python -m src.cli set-password NAME
+python -m src.cli set-role NAME admin|user
+python -m src.cli deactivate NAME        # existing tokens stop working immediately
+python -m src.cli activate NAME
+python -m src.cli list-users
+```
 
 ### Notes per endpoint
 

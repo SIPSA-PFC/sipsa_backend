@@ -157,6 +157,11 @@ class TokenOut(BaseModel):
     token_type:   str = "bearer"
 
 
+class UserOut(BaseModel):
+    username: str
+    role:     str        # "admin" | "user"
+
+
 # =============================================================================
 # Pre-computed results  — GET /resultados
 # Served directly from the .mat file, no training required

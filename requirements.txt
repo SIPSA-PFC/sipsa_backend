@@ -20,9 +20,9 @@ asyncpg>=0.29            # PostgreSQL async driver — use for production
 alembic>=1.13
 
 # Auth
-python-jose[cryptography]>=3.3
-passlib[bcrypt]>=1.7
-python-multipart>=0.0.9
+PyJWT>=2.8
+bcrypt>=4.1
+python-multipart>=0.0.9      # form parsing for POST /auth/token
 
 # Dev / testing
 pytest>=8.0
