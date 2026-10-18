@@ -1,327 +1,224 @@
 """
-train.py
---------
-Python equivalent of Run1DLSTM_01.m.
+ml/train.py
+-----------
+Trains the paper's 1D-LSTM models (Run1DLSTM_01.m) and saves them.
 
-Trains 1D-LSTM models to forecast aggregate dengue incidence for the
-municipality of Natal, RN-Brazil. Two predictor types are tested
-(past dengue incidence and past EDI), each with five lag configurations.
+    python -m src.ml.train                 # full run: 10 configurations x 30 reps (~80 min on 2 CPUs)
+    python -m src.ml.train --dev           # 3 reps per configuration (~8 min), for development
+    python -m src.ml.train --configs dengue:1,edi:6 --reps 5
 
-Usage
------
-    python -m src.ml.train
+Configurations: input dengue or edi, x lags 1, 3, 4, 5, 6. The target is
+always log2 of city-wide mean dengue cases. Training uses the first 80% of
+weeks; the remaining weeks are the test period, as in the paper.
 
-Outputs
--------
-    data/models/eval_results.npz
-        YPred  : (n_timesteps, n_reps, n_models)
-        YTest  : (n_timesteps,)
-        tTest  : (n_timesteps,)  – as MATLAB datenums (float)
+Output (data/models/<run_id>/):
+    <input>_lag<lag>/rep_NN.keras   one saved model per repetition
+    results.npz                     YPred (test weeks x reps x configs, log2),
+                                    YTest, test week labels, configuration names
+    metrics.json                    RMSE / r per configuration and naive baselines
+    run.json                        settings, data window, timing
+
+Each configuration is also registered in the model_run table (skip with
+--no-register), which is how the API finds trained models. To register an
+existing run in another (or rebuilt) database without retraining:
+
+    python -m src.ml.train --register data/models/<run_id>
 """
 
 from __future__ import annotations
 
+import argparse
+import asyncio
+import json
+import logging
+import platform
+import subprocess
 import time
-import random
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
-import scipy.io as sio
 
-# ── optional: set seeds for reproducibility ──────────────────────────────────
-SEED = 1
-random.seed(SEED)
-np.random.seed(SEED)
+from src.ml import data as ml_data
+from src.ml import model as ml_model
+from src.ml.preprocessing import (
+    INPUT_TYPES, SUPPORTED_LAGS, build_inputs, lag_offsets, log2_transform, n_train_samples, split_targets,
+)
+from src.ml.utils import compute_r, compute_rmse, persistence_baseline, rmse_and_r
 
-try:
-    import tensorflow as tf
-    tf.random.set_seed(SEED)
-    TF_AVAILABLE = True
-except ImportError:
-    TF_AVAILABLE = False
-    print("TensorFlow not found – install it with:  pip install tensorflow")
-    raise
+log = logging.getLogger("sipsa.train")
 
-# ── project paths ─────────────────────────────────────────────────────────────
-ROOT        = Path(__file__).resolve().parent.parent.parent   # repo root (src/ml/ -> src/ -> root)
-DATA_RAW    = ROOT / "data" / "raw"
-DATA_MODELS = ROOT / "data" / "models"
-DATA_MODELS.mkdir(parents=True, exist_ok=True)
+ROOT       = Path(__file__).resolve().parent.parent.parent
+MODELS_DIR = ROOT / "data" / "models"
+TRAIN_SPLIT = 0.8
 
 
-# =============================================================================
-# Data loading
-# =============================================================================
+def config_name(input_type: str, lag: int) -> str:
+    return f"{input_type}_lag{lag}"
 
-def load_data(rearranged_path: Path, dengue_xlsx: Path) -> dict:
-    """
-    Load EDI and dengue incidence data.
 
-    NOTE: The dengue xlsx file (Dados_Modelagem.xlsx, sheet 4) is read when
-    available.  If it is absent the script falls back to the EDI data only
-    and raises a clear error – the xlsx is required for training.
-    """
-    # --- EDI / Ovitrap (Rearranged_Data.mat) --------------------------------
-    mat = sio.loadmat(str(rearranged_path), squeeze_me=True)
-    egg = mat["EggIndice_Agregated"]           # (36, 208, 2)
-    EDI_mat = egg[:, :, 1].T                   # (208, 36)  EDI per neighborhood
+def parse_configs(text: str | None) -> list[tuple[str, int]]:
+    if not text:
+        return [(i, lag) for i in INPUT_TYPES for lag in SUPPORTED_LAGS]
+    configs = []
+    for item in text.split(","):
+        input_type, lag = item.split(":")
+        if input_type not in INPUT_TYPES or int(lag) not in SUPPORTED_LAGS:
+            raise SystemExit(f"Unknown configuration {item!r}; use input:lag with input in {INPUT_TYPES} and lag in {SUPPORTED_LAGS}")
+        configs.append((input_type, int(lag)))
+    return configs
 
-    # --- Dengue incidence (xlsx) --------------------------------------------
+
+def config_metrics(y_pred_log2: np.ndarray, y_test: np.ndarray, dengue: np.ndarray,
+                   test_targets: np.ndarray, lag: int) -> dict:
+    mean_rmse, se_rmse = compute_rmse(y_pred_log2, y_test)
+    mean_r, se_r = compute_r(y_pred_log2, y_test)
+    lead = min(lag_offsets(lag))
+    b_rmse, b_r = rmse_and_r(y_test, persistence_baseline(dengue, test_targets, lead))
+    return {
+        "mean_rmse": float(mean_rmse), "std_err_rmse": float(se_rmse),
+        "mean_r": float(mean_r), "std_err_r": float(se_r),
+        "baseline": {"name": f"same as {lead} week(s) earlier", "lead_weeks": lead,
+                     "rmse": b_rmse, "r": b_r},
+    }
+
+
+async def _register(run_id: str, results: list[dict], series: ml_data.CitySeries) -> None:
+    from sqlalchemy import select
+    from src.api.models.db_models import EpiWeek, ModelRun
+    from src.core.database import AsyncSessionLocal, engine
+
     try:
-        import pandas as pd
-        df = pd.read_excel(str(dengue_xlsx), sheet_name=3,
-                           index_col=0, header=0)
-        dengue_mat = df.values.astype(float).T  # (weeks, neighborhoods)
-    except FileNotFoundError:
-        raise FileNotFoundError(
-            f"Dengue data not found at {dengue_xlsx}.\n"
-            "Please copy 'Dados_Modelagem.xlsx' into data/raw/"
-        )
-
-    # --- Aggregate over neighborhoods (nanmean) ------------------------------
-    Dengue = np.nanmean(dengue_mat, axis=1)    # (208,)
-    EDI    = np.nanmean(EDI_mat,    axis=1)    # (208,)
-
-    return {"Dengue": Dengue, "EDI": EDI}
+        async with AsyncSessionLocal() as session, session.begin():
+            week_ids = {(w.epi_year, w.epi_week): w.id for w in (await session.execute(select(EpiWeek))).scalars()}
+            for r in results:
+                first, last = series.weeks[r["train_targets"][0]], series.weeks[r["train_targets"][-1]]
+                if first not in week_ids or last not in week_ids:
+                    raise SystemExit("Training weeks are not in the database; run the ETL first, or use --no-register.")
+                session.add(ModelRun(
+                    model_version=run_id, input_type=r["input_type"], lag=r["lag"],
+                    train_from_week_id=week_ids[first], train_to_week_id=week_ids[last],
+                    n_reps=r["n_reps"], metrics=r["metrics"], artifact_path=r["artifact_path"],
+                ))
+    finally:
+        await engine.dispose()
 
 
-# =============================================================================
-# Index helpers  (direct translation of the MATLAB indexing logic)
-# =============================================================================
+def register_existing(run_dir: Path) -> None:
+    """Record an already-trained run (its run.json / metrics.json) in model_run."""
+    run = json.loads((run_dir / "run.json").read_text())
+    metrics = json.loads((run_dir / "metrics.json").read_text())
+    series = ml_data.load_from_raw()
+    results = []
+    for name in run["configs"]:
+        input_type, lag = name.rsplit("_lag", 1)
+        train_targets, _ = split_targets(len(series.weeks), int(lag), run["train_split"])
+        results.append({"input_type": input_type, "lag": int(lag), "n_reps": run["n_reps"],
+                        "metrics": metrics[name], "train_targets": train_targets.tolist(),
+                        "artifact_path": str((run_dir / name).resolve().relative_to(ROOT))})
+    asyncio.run(_register(run["run_id"], results, series))
+    log.info("Registered %d configurations of %s", len(results), run["run_id"])
 
-def build_indices(n_samples: int, n_train: int, i_back: int):
-    """
-    Build training and test index arrays for a given lag configuration.
 
-    Parameters
-    ----------
-    n_samples : total number of time steps
-    n_train   : number of training samples
-    i_back    : lag depth (1 → single lag; 3-6 → window of 3 lags)
+def _git_commit() -> str | None:
+    try:
+        return subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True,
+                              text=True, check=True).stdout.strip()
+    except Exception:
+        return None
 
-    Returns
-    -------
-    IndTrainOut, IndTrainIn, IndTestOut, IndTestIn  – all 0-based
-    """
-    IndTestOut = np.arange(n_train, n_samples)   # 0-based
 
-    if i_back == 1:
-        vector = [i_back]
-        IndTrainIn = np.empty((1, n_train - i_back), dtype=int)
-        IndTestIn  = np.empty((1, len(IndTestOut)), dtype=int)
+def main(argv: list[str] | None = None) -> None:
+    ap = argparse.ArgumentParser(prog="python -m src.ml.train", description=__doc__.split("\n\n")[0])
+    ap.add_argument("--reps", type=int, default=30, help="repetitions per configuration (paper: 30)")
+    ap.add_argument("--dev", action="store_true", help="quick run: 3 repetitions")
+    ap.add_argument("--configs", help="subset, e.g. dengue:1,edi:6 (default: all 10)")
+    ap.add_argument("--source", choices=["raw", "db"], default="raw",
+                    help="raw files (as the paper) or the database (default: raw)")
+    ap.add_argument("--seed", type=int, default=1, help="base random seed (paper: 1)")
+    ap.add_argument("--run-id", help="name of the output folder (default: lstm-<date>-<reps>r)")
+    ap.add_argument("--no-register", action="store_true", help="do not record the run in model_run")
+    ap.add_argument("--register", type=Path, metavar="RUN_DIR",
+                    help="only register an existing run folder in model_run (no training)")
+    args = ap.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
+
+    if args.register:
+        register_existing(args.register)
+        return
+
+    n_reps  = 3 if args.dev else args.reps
+    configs = parse_configs(args.configs)
+    run_id  = args.run_id or f"lstm-{datetime.now(timezone.utc):%Y%m%d-%H%M}-{n_reps}r"
+    out_dir = MODELS_DIR / run_id
+    if out_dir.exists():
+        raise SystemExit(f"{out_dir} already exists; pick another --run-id")
+
+    if args.source == "raw":
+        series = ml_data.load_from_raw()
     else:
-        vector = list(range(i_back - 2, i_back + 1))   # [iBack-2, iBack-1, iBack]
-        IndTrainIn = np.empty((3, n_train - i_back), dtype=int)
-        IndTestIn  = np.empty((3, len(IndTestOut)), dtype=int)
+        from src.core.database import AsyncSessionLocal, engine
 
-    IndTrainOut = np.arange(i_back, n_train)     # 0-based
+        async def _load():
+            try:
+                async with AsyncSessionLocal() as session:
+                    return await ml_data.load_from_db(session)
+            finally:
+                await engine.dispose()
+        series = asyncio.run(_load())
 
-    for cnt, ii_back in enumerate(vector):
-        IndTrainIn[cnt, :] = IndTrainOut - ii_back
-        IndTestIn[cnt, :]  = IndTestOut  - ii_back
+    y = log2_transform(series.dengue, "dengue")
+    n = len(y)
+    log.info("Run %s: %d configurations x %d reps, %d weeks (%s to %s), %d for training",
+             run_id, len(configs), n_reps, n, series.weeks[0], series.weeks[-1], n_train_samples(n, TRAIN_SPLIT))
 
-    return IndTrainOut, IndTrainIn, IndTestOut, IndTestIn
+    _, test_targets = split_targets(n, 1, TRAIN_SPLIT)
+    y_test = series.dengue[test_targets]
+    y_pred = np.full((len(test_targets), n_reps, len(configs)), np.nan)
+    results, t_start = [], time.time()
 
+    for ci, (input_type, lag) in enumerate(configs):
+        t_cfg = time.time()
+        x = log2_transform(series.series(input_type), input_type)
+        train_targets, test_t = split_targets(n, lag, TRAIN_SPLIT)
+        x_train, y_train = build_inputs(x, train_targets, lag), y[train_targets]
+        x_all = build_inputs(x, np.concatenate([train_targets, test_t]), lag)
+        cfg_dir = out_dir / config_name(input_type, lag)
+        cfg_dir.mkdir(parents=True)
 
-# =============================================================================
-# LSTM model  (replaces TrainLSTM nested function in MATLAB)
-# =============================================================================
+        for rep in range(n_reps):
+            model = ml_model.train_rep(x_train, y_train, seed=args.seed * 100_000 + ci * 1_000 + rep)
+            y_pred[:, rep, ci] = ml_model.predict_sequence(model, x_all)[-len(test_t):]
+            model.save(cfg_dir / f"rep_{rep:02d}.keras")
 
-def build_train_lstm(input_size: int) -> tf.keras.Model:
-    """
-    Non-stateful LSTM used during training.
-    Accepts full sequences so Keras can run backprop efficiently.
+        metrics = config_metrics(y_pred[:, :, ci], y_test, series.dengue, test_t, lag)
+        results.append({"input_type": input_type, "lag": lag, "n_reps": n_reps, "metrics": metrics,
+                        "train_targets": train_targets.tolist(),
+                        "artifact_path": str(cfg_dir.relative_to(ROOT))})
+        log.info("%-12s r=%.3f RMSE=%.2f | baseline r=%.3f RMSE=%.2f | %.0fs",
+                 config_name(input_type, lag), metrics["mean_r"], metrics["mean_rmse"],
+                 metrics["baseline"]["r"], metrics["baseline"]["rmse"], time.time() - t_cfg)
 
-    Architecture matches MATLAB:
-        sequenceInputLayer → lstmLayer(100) → fullyConnectedLayer(1)
-    """
-    model = tf.keras.Sequential([
-        tf.keras.layers.Input(shape=(None, input_size)),
-        tf.keras.layers.LSTM(100, stateful=False, return_sequences=False),
-        tf.keras.layers.Dense(1),
-    ])
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=0.005),
-        loss="mse",
-    )
-    return model
+    elapsed = time.time() - t_start
+    names = [config_name(i, lag) for i, lag in configs]
+    np.savez(out_dir / "results.npz", YPred=y_pred, YTest=y_test, configs=np.array(names),
+             test_weeks=np.array([f"{a}-{b:02d}" for a, b in (series.weeks[t] for t in test_targets)]))
+    (out_dir / "metrics.json").write_text(json.dumps(
+        {name: r["metrics"] for name, r in zip(names, results)}, indent=2))
+    (out_dir / "run.json").write_text(json.dumps({
+        "run_id": run_id, "created_at": datetime.now(timezone.utc).isoformat(),
+        "source": args.source, "n_reps": n_reps, "seed": args.seed, "train_split": TRAIN_SPLIT,
+        "weeks": [f"{a}-{b:02d}" for a, b in (series.weeks[0], series.weeks[-1])],
+        "test_weeks": [f"{a}-{b:02d}" for a, b in (series.weeks[test_targets[0]], series.weeks[test_targets[-1]])],
+        "configs": names, "elapsed_seconds": round(elapsed),
+        "tensorflow": ml_model.tf().__version__, "python": platform.python_version(),
+        "git_commit": _git_commit(),
+    }, indent=2))
+    log.info("Done in %.1f min. Saved to %s", elapsed / 60, out_dir)
 
-
-def build_stateful_lstm(input_size: int) -> tf.keras.Model:
-    """
-    Stateful LSTM used during step-by-step test prediction.
-
-    batch_size=1 because we feed one time step at a time, exactly matching
-    MATLAB's predictAndUpdateState behaviour where the hidden state (h, c)
-    carries forward between consecutive test steps.
-    """
-    model = tf.keras.Sequential([
-        tf.keras.layers.Input(batch_shape=(1, 1, input_size)),
-        tf.keras.layers.LSTM(100, stateful=True, return_sequences=False),
-        tf.keras.layers.Dense(1),
-    ])
-    model.compile(loss="mse")
-    return model
-
-
-def lr_schedule(epoch: int, lr: float) -> float:
-    """
-    Piecewise LR drop matching MATLAB's LearnRateSchedule:'piecewise':
-        epoch 0-124  → 0.005
-        epoch 125+   → 0.005 × 0.2 = 0.001
-    """
-    if epoch == 125:
-        return lr * 0.2
-    return lr
-
-
-def transfer_weights(src: tf.keras.Model, dst: tf.keras.Model) -> None:
-    """Copy trained weights from the non-stateful model into the stateful one."""
-    for src_layer, dst_layer in zip(src.layers, dst.layers):
-        dst_layer.set_weights(src_layer.get_weights())
-
-
-def train_lstm(X_train: np.ndarray, Y_train: np.ndarray,
-               X_test: np.ndarray, n_reps: int) -> np.ndarray:
-    """
-    Train the LSTM n_reps times and collect predictions using stateful
-    step-by-step inference — matching MATLAB's predictAndUpdateState logic.
-
-    Training phase
-    --------------
-    Uses a standard non-stateful LSTM fed the full training sequence at once
-    (efficient for backprop).
-
-    After training, the MATLAB script does:
-        netLSTM = resetState(netLSTM)
-        netLSTM = predictAndUpdateState(netLSTM, XTrain)  ← warm up on training data
-        for i = 1:numTimeStepsTest
-            [netLSTM, YPred(i)] = predictAndUpdateState(netLSTM, XTest(:,i))
-
-    We replicate this exactly:
-        1. Reset hidden state to zeros.
-        2. Run all training steps through the stateful model to build up
-           the same hidden state the MATLAB model had at the end of training.
-        3. Step through each test sample one at a time, carrying (h, c) forward.
-
-    Parameters
-    ----------
-    X_train : (input_size, n_train_steps)
-    Y_train : (n_train_steps,)  – not used in inference, kept for API symmetry
-    X_test  : (input_size, n_test_steps)
-    n_reps  : number of independent runs
-
-    Returns
-    -------
-    Y_pred  : (n_test_steps, n_reps)
-    """
-    input_size   = X_train.shape[0]
-    n_test_steps = X_test.shape[1]
-
-    # Shape for non-stateful training: (n_train_steps, 1, input_size)
-    # Each time step is presented as a sequence of length 1
-    X_tr = X_train.T.reshape(-1, 1, input_size)
-    Y_tr = Y_train.reshape(-1, 1)
-
-    Y_pred = np.zeros((n_test_steps, n_reps))
-    lr_cb  = tf.keras.callbacks.LearningRateScheduler(lr_schedule, verbose=0)
-
-    for i_rep in range(n_reps):
-        print(f"  Rep {i_rep + 1}/{n_reps}", end="\r")
-
-        # ── 1. Train on full training sequence (non-stateful, efficient) ──────
-        train_model = build_train_lstm(input_size)
-        train_model.fit(
-            X_tr, Y_tr,
-            epochs=250,
-            batch_size=64,
-            callbacks=[lr_cb],
-            verbose=0,
-            shuffle=False,    # must preserve temporal order
-        )
-
-        # ── 2. Transfer weights to stateful model ─────────────────────────────
-        pred_model = build_stateful_lstm(input_size)
-        transfer_weights(train_model, pred_model)
-
-        # ── 3. Warm up: run training data through stateful model to replicate
-        #       MATLAB's  predictAndUpdateState(netLSTM, XTrain)
-        #       This builds up the same (h, c) state as end-of-training. ──────
-        pred_model.reset_states()
-        for t in range(X_train.shape[1]):
-            step = X_train[:, t].reshape(1, 1, input_size)
-            pred_model.predict(step, verbose=0)   # discard output, keep state
-
-        # ── 4. Step-by-step test prediction, carrying state forward ───────────
-        #       Matches MATLAB's inner loop exactly:
-        #           [netLSTM, YPred(i)] = predictAndUpdateState(netLSTM, XTest(:,i))
-        for i in range(n_test_steps):
-            step = X_test[:, i].reshape(1, 1, input_size)
-            Y_pred[i, i_rep] = pred_model.predict(step, verbose=0).squeeze()
-
-    print()
-    return Y_pred
-
-
-# =============================================================================
-# Main training loop
-# =============================================================================
-
-def main():
-    # ── paths ─────────────────────────────────────────────────────────────────
-    rearranged_path = DATA_RAW / "Rearranged_Data.mat"
-    dengue_xlsx     = DATA_RAW / "Dados_Modelagem.xlsx"
-
-    # ── load data ─────────────────────────────────────────────────────────────
-    print("Loading data …")
-    data   = load_data(rearranged_path, dengue_xlsx)
-    Dengue = data["Dengue"]   # (208,)
-    EDI    = data["EDI"]      # (208,)
-
-    n_samples = len(Dengue)
-    n_train   = round(0.8 * n_samples)
-
-    # ── experiment configuration ───────────────────────────────────────────────
-    N_REPS         = 30
-    N_BACK_SAMPLES = [1, 3, 4, 5, 6]
-    IN_SERIES      = {"Dengue": np.log2(Dengue), "EDI": np.log2(EDI)}
-    y1             = np.log2(Dengue)       # always predict log2(Dengue)
-
-    IndTestOut     = np.arange(n_train, n_samples)
-    n_test         = len(IndTestOut)
-    YTest          = Dengue[IndTestOut]
-
-    n_models = len(IN_SERIES) * len(N_BACK_SAMPLES)
-    YPred    = np.full((n_test, N_REPS, n_models), np.nan)
-
-    # ── training ───────────────────────────────────────────────────────────────
-    t_start   = time.time()
-    cnt_model = 0
-
-    for in_name, x1 in IN_SERIES.items():
-        for i_back in N_BACK_SAMPLES:
-            print(f"\n=== Model {cnt_model + 1}/{n_models}  "
-                  f"input={in_name}  lag={i_back} ===")
-
-            IndTrainOut, IndTrainIn, _, IndTestIn = build_indices(
-                n_samples, n_train, i_back)
-
-            X_train = x1[IndTrainIn]          # (input_size, n_train_steps)
-            Y_train = y1[IndTrainOut]         # (n_train_steps,)
-            X_test  = x1[IndTestIn]           # (input_size, n_test_steps)
-
-            YPred[:, :, cnt_model] = train_lstm(
-                X_train, Y_train, X_test, N_REPS)
-
-            cnt_model += 1
-
-    elapsed_hr = (time.time() - t_start) / 3600
-    print(f"\nDone. Elapsed: {elapsed_hr:.2f} hr")
-
-    # ── save results ───────────────────────────────────────────────────────────
-    out_path = DATA_MODELS / "eval_results.npz"
-    np.savez(str(out_path), YPred=YPred, YTest=YTest)
-    print(f"Results saved to {out_path}")
+    if not args.no_register:
+        asyncio.run(_register(run_id, results, series))
+        log.info("Registered %d configurations in model_run as %s", len(results), run_id)
 
 
 if __name__ == "__main__":

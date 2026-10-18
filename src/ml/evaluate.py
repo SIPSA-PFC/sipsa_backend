@@ -12,7 +12,10 @@ and reproduces all three figures:
 
 Usage
 -----
-    python src/evaluate.py
+    python -m src.ml.evaluate                              # the paper's results (.mat)
+    python -m src.ml.evaluate --run data/models/<run_id>   # one of our training runs,
+                                                           # compared with the paper and
+                                                           # naive baselines
 """
 
 from __future__ import annotations
@@ -23,7 +26,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
-from utils import (
+from src.ml.utils import (
     load_eval_results,
     compute_rmse,
     compute_r,
@@ -31,7 +34,7 @@ from utils import (
 )
 
 # ── paths ─────────────────────────────────────────────────────────────────────
-ROOT     = Path(__file__).resolve().parent.parent
+ROOT     = Path(__file__).resolve().parent.parent.parent   # repo root (src/ml/ -> src/ -> root)
 DATA_RAW = ROOT / "data" / "raw"
 OUT_IMG  = ROOT / "outputs"
 OUT_IMG.mkdir(parents=True, exist_ok=True)
@@ -182,10 +185,11 @@ def plot_best_models(
     y_pred_dd: np.ndarray,   # (n_timesteps, n_reps)  log2-scale
     y_pred_od: np.ndarray,
     y_test:    np.ndarray,   # (n_timesteps,)  linear scale
-    t_test:    np.ndarray,   # (n_timesteps,)  MATLAB datenums
+    t_test:    np.ndarray | None,   # (n_timesteps,)  MATLAB datenums, or None if dates given
     color_dd,
     color_od,
     save_path: Path | None = None,
+    dates=None,
 ) -> None:
     """
     Reproduces the 2×2 figure: scatter (top) + time series (bottom)
@@ -193,7 +197,7 @@ def plot_best_models(
     """
     pred_dd_mean = np.mean(2.0 ** y_pred_dd, axis=1)
     pred_od_mean = np.mean(2.0 ** y_pred_od, axis=1)
-    dates        = matlab_datenum_to_datetime(t_test)
+    dates        = matlab_datenum_to_datetime(t_test) if dates is None else dates
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 9))
     fig.patch.set_facecolor("white")
@@ -302,5 +306,94 @@ def main():
     )
 
 
+# =============================================================================
+# Comparison of one of our runs with the paper and naive baselines
+# =============================================================================
+
+def _paper_metrics() -> dict[str, dict]:
+    """The paper's per-configuration metrics, keyed like our runs (dengue_lag1 …)."""
+    from src.ml.preprocessing import INPUT_TYPES, SUPPORTED_LAGS
+    res = load_eval_results(MAT_FILE)
+    names = [f"{i}_lag{lag}" for i in INPUT_TYPES for lag in SUPPORTED_LAGS]
+    out = {}
+    for k, name in enumerate(names):
+        r_mean, r_se = compute_r(res["YPred"][:, :, k], res["YTest"])
+        e_mean, e_se = compute_rmse(res["YPred"][:, :, k], res["YTest"])
+        out[name] = {"mean_r": float(r_mean), "std_err_r": float(r_se),
+                     "mean_rmse": float(e_mean), "std_err_rmse": float(e_se)}
+    return out
+
+
+def compare_run(run_dir: Path) -> str:
+    """Markdown table: paper vs this run vs the naive baseline, per configuration."""
+    import json
+    run = json.loads((run_dir / "run.json").read_text())
+    ours = json.loads((run_dir / "metrics.json").read_text())
+    paper = _paper_metrics() if MAT_FILE.exists() else {}
+
+    lines = [
+        f"## Run `{run['run_id']}`",
+        "",
+        f"{run['n_reps']} repetitions per configuration, seed {run['seed']}, data from {run['source']}; "
+        f"test weeks {run['test_weeks'][0]} to {run['test_weeks'][1]}; "
+        f"{run['elapsed_seconds'] / 60:.0f} min, TensorFlow {run['tensorflow']}.",
+        "",
+        "| Configuration | Paper r | Ours r | Paper RMSE | Ours RMSE | Baseline | Baseline r | Baseline RMSE |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for name, m in ours.items():
+        p = paper.get(name)
+        b = m["baseline"]
+        lines.append(
+            f"| {name} | {p['mean_r']:.3f} | {m['mean_r']:.3f} ± {m['std_err_r']:.3f} | "
+            f"{p['mean_rmse']:.2f} | {m['mean_rmse']:.2f} ± {m['std_err_rmse']:.2f} | "
+            f"{b['name']} | {b['r']:.3f} | {b['rmse']:.2f} |"
+            if p else
+            f"| {name} | – | {m['mean_r']:.3f} ± {m['std_err_r']:.3f} | – | "
+            f"{m['mean_rmse']:.2f} ± {m['std_err_rmse']:.2f} | {b['name']} | {b['r']:.3f} | {b['rmse']:.2f} |"
+        )
+    lines += ["", "± is the standard error over repetitions. The baseline predicts each week "
+              "with the value observed as many weeks earlier as the configuration's newest input."]
+    return "\n".join(lines)
+
+
+def evaluate_run(run_dir: Path) -> None:
+    import json
+    from src.core import epiweek
+    run_dir = Path(run_dir)
+    out = OUT_IMG / run_dir.name
+    out.mkdir(parents=True, exist_ok=True)
+
+    report = compare_run(run_dir)
+    (out / "comparison.md").write_text(report + "\n")
+    print(report)
+
+    res = np.load(run_dir / "results.npz")
+    names = [str(n) for n in res["configs"]]
+    metrics = json.loads((run_dir / "metrics.json").read_text())
+    if len(names) == 10:
+        lags = [int(n.rsplit("_lag", 1)[1]) for n in names[:5]]
+        plot_performance(
+            np.array([metrics[n]["mean_rmse"] for n in names]), np.array([metrics[n]["std_err_rmse"] for n in names]),
+            np.array([metrics[n]["mean_r"] for n in names]), np.array([metrics[n]["std_err_r"] for n in names]),
+            n_mdls_half=5, lag_labels=[lag_label(b) for b in lags],
+            save_path=out / "Fig1_model_performance.png",
+        )
+        best_dd = max(range(5), key=lambda i: metrics[names[i]]["mean_r"])
+        best_od = max(range(5, 10), key=lambda i: metrics[names[i]]["mean_r"])
+        dates = [epiweek.week_start(*map(int, w.split("-"))) for w in res["test_weeks"]]
+        cmap = plt.get_cmap("tab10")
+        plot_best_models(res["YPred"][:, :, best_dd], res["YPred"][:, :, best_od], res["YTest"], None,
+                         cmap(best_dd), cmap(best_od - 5), save_path=out / "Fig2_best_models.png", dates=dates)
+    print(f"\nSaved report and figures to {out}")
+
+
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser(prog="python -m src.ml.evaluate")
+    parser.add_argument("--run", type=Path, help="a training run folder, e.g. data/models/<run_id>")
+    cli = parser.parse_args()
+    if cli.run:
+        evaluate_run(cli.run)
+    else:
+        main()

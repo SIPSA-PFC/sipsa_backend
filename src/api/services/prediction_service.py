@@ -15,6 +15,7 @@ from src.api.services.validation_service import ValidationService
 from src.api.services.aggregation_service import AggregationService
 from src.core import epiweek
 from src.ml.inference import ModelNotReadyError, run_prediction
+from src.ml.preprocessing import MissingDataError
 
 MODEL_VERSION = "sipsa-lstm-v1"
 
@@ -83,6 +84,11 @@ class PredictionService:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=str(exc),
+            ) from exc
+        except MissingDataError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Cannot forecast: {exc}.",
             ) from exc
 
         # 5. Build future week rows

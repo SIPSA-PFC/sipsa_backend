@@ -19,8 +19,7 @@ import numpy as np
 from pathlib import Path
 from functools import lru_cache
 
-# Lag windows used in training (MATLAB NBackSamples = [1 3:6]).
-SUPPORTED_LAGS = (1, 3, 4, 5, 6)
+from src.ml.preprocessing import SUPPORTED_LAGS, lag_offsets, log2_transform
 
 # TensorFlow is imported lazily so the rest of the API starts even if TF
 # is not installed — inference will raise a clear error only when called.
@@ -226,18 +225,14 @@ def run_prediction(
 
     # ── 1. Select and log2-transform the input series ─────────────────────────
     raw = dengue_series if input_type == "dengue" else edi_series
-    x   = np.log2(np.maximum(raw, 1e-6))    # clip negatives before log2
-    y   = np.log2(np.maximum(dengue_series, 1e-6))   # target is always dengue
+    x   = log2_transform(raw, input_type)       # refuses missing / non-positive values
+    y   = log2_transform(dengue_series, "dengue")   # target is always dengue
 
     n_samples = len(x)
 
     # ── 2. Build lag indices over the FULL series ─────────────────────────────
-    if lag == 1:
-        vector = [1]
-        input_size = 1
-    else:
-        vector = list(range(lag - 2, lag + 1))
-        input_size = 3
+    vector = lag_offsets(lag)
+    input_size = len(vector)
 
     # Training uses the whole available history
     train_end  = n_samples

@@ -172,14 +172,20 @@ DATABASE_URL=postgresql+asyncpg://sipsa:sipsa123@localhost:5432/sipsa
 
 ---
 
-### Retrain the LSTM models from scratch
+### Train the LSTM models
 
-Only needed to regenerate model weights with new data.
-Estimated time: 12–18h on CPU, 1.5–3h on a free Colab T4 GPU.
+Forecast routes need trained models. Training runs offline and registers the models in the
+database (`model_run`); the API loads them at startup.
 
 ```bash
-python -m src.ml.train
+python -m src.ml.train --dev        # 3 repetitions per configuration, ~8 min on 2 CPU cores
+python -m src.ml.train              # the paper's 30 repetitions, ~80 min on 2 CPU cores (no GPU needed)
+python -m src.ml.evaluate --run data/models/<run_id>   # compare with the paper and naive baselines
 ```
+
+Models are saved in `data/models/<run_id>/` (not committed). To use an existing run with
+another or rebuilt database: `python -m src.ml.train --register data/models/<run_id>`.
+How the port compares with the paper: [`docs/REPRODUCTION.md`](docs/REPRODUCTION.md).
 
 ---
 

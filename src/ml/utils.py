@@ -134,3 +134,23 @@ def matlab_datenum_to_datetime(datenums: np.ndarray):
     # 719529 days between MATLAB epoch and Unix epoch
     days = datenums.astype(float) - 719529
     return pd.to_datetime(days, unit="D", origin="unix")
+
+
+# ---------------------------------------------------------------------------
+# Baselines and plain metrics (linear scale)
+# ---------------------------------------------------------------------------
+
+def rmse_and_r(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[float, float]:
+    """RMSE and Pearson r of one prediction series, both in case units."""
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+    return float(np.sqrt(np.mean((y_true - y_pred) ** 2))), float(np.corrcoef(y_true, y_pred)[0, 1])
+
+
+def persistence_baseline(series: np.ndarray, targets: np.ndarray, lead: int) -> np.ndarray:
+    """
+    Naive forecast: the value observed `lead` weeks before each target.
+    With the same lead as a model's newest input, it uses the same
+    information as that model, so it is the fair yardstick.
+    """
+    return np.asarray(series, dtype=float)[np.asarray(targets) - lead]

@@ -17,6 +17,10 @@ Weekly measurements (one row per neighborhood per epidemiological week)
 Access
     users             — accounts that can log in to the API (role admin | user)
 
+Models
+    model_run         — one trained model configuration (input, lag) of a
+                        training run: training window, metrics, saved files
+
 Derived
     model_prediction  — cached LSTM output (replaced by `forecast` in
                         refactor/offline-inference)
@@ -28,7 +32,7 @@ stored and queried separately.
 from datetime import date, datetime
 
 from sqlalchemy import (
-    Boolean, CheckConstraint, Date, DateTime, Float, ForeignKey, Integer, String, Text,
+    JSON, Boolean, CheckConstraint, Date, DateTime, Float, ForeignKey, Integer, String, Text,
     UniqueConstraint, func, true,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -157,6 +161,37 @@ class OvitrapReading(Base):
 
     neighborhood: Mapped["Neighborhood"] = relationship(back_populates="ovitrap_readings")
     week:         Mapped["EpiWeek"]      = relationship()
+
+
+# =============================================================================
+# Models
+# =============================================================================
+
+class ModelRun(Base):
+    """
+    One model configuration from one training run (python -m src.ml.train).
+    A run trains 10 configurations (2 inputs x 5 lags), each with n_reps
+    independent repetitions saved under artifact_path.
+    """
+    __tablename__ = "model_run"
+    __table_args__ = (
+        UniqueConstraint("model_version", "input_type", "lag"),
+        CheckConstraint("input_type IN ('dengue', 'edi')", name="input_type"),
+    )
+
+    id:                 Mapped[int]             = mapped_column(Integer, primary_key=True)
+    model_version:      Mapped[str]             = mapped_column(String(60), nullable=False)   # training run id
+    input_type:         Mapped[str]             = mapped_column(String(10), nullable=False)
+    lag:                Mapped[int]             = mapped_column(Integer, nullable=False)
+    train_from_week_id: Mapped[int]             = mapped_column(ForeignKey("epi_week.id"), nullable=False)
+    train_to_week_id:   Mapped[int]             = mapped_column(ForeignKey("epi_week.id"), nullable=False)
+    n_reps:             Mapped[int]             = mapped_column(Integer, nullable=False)
+    metrics:            Mapped[dict | None]     = mapped_column(JSON)
+    artifact_path:      Mapped[str]             = mapped_column(String(500), nullable=False)  # relative to repo root
+    created_at:         Mapped[datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    train_from_week: Mapped["EpiWeek"] = relationship(foreign_keys=[train_from_week_id])
+    train_to_week:   Mapped["EpiWeek"] = relationship(foreign_keys=[train_to_week_id])
 
 
 # =============================================================================

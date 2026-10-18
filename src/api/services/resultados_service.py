@@ -94,9 +94,12 @@ class ResultadosService:
             ))
 
         # ── Build time series for the two best models ─────────────────────────
-        # Model 0: D→D 1 past sample  (best overall from evaluation)
-        # Model 9: O→D 6:4 past samples  (best EDI-based from evaluation)
-        best_indices = [0, 9]
+        # Best dengue-input (D→D) and best EDI-input (O→D) model by mean r,
+        # computed rather than hard-coded (for the paper's file: models 0 and 9).
+        best_indices = [
+            max(range(n_half), key=lambda i: metrics[i].mean_r),
+            max(range(n_half, n_models), key=lambda i: metrics[i].mean_r),
+        ]
         best_models: list[BestModelSeriesOut] = []
 
         for idx in best_indices:

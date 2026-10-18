@@ -35,7 +35,9 @@ class AggregationService:
         ).sort_index()
 
         df = pd.DataFrame({"dengue": dengue_s, "edi": edi_s})
-        df["edi"] = df["edi"].fillna(df["edi"].mean())
+        # Weeks without EDI stay NaN. Filling them with the series mean (as
+        # before) used values from future weeks; the model code now refuses
+        # missing values with a clear error instead.
 
         date_map = {(r["epi_year"], r["epi_week"]): r["week_start"] for r in dengue_rows}
 
