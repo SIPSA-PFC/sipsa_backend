@@ -1,4 +1,4 @@
-"""GET /casos/{neighborhood_id}"""
+"""GET /casos/{neighborhood_id} — deprecated: use GET /bairros/{id}/casos."""
 from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,7 +10,7 @@ from src.api.services.validation_service import ValidationService
 
 router = APIRouter(prefix="/casos", tags=["casos"])
 
-@router.get("/{neighborhood_id}", response_model=DengueCaseSeriesOut)
+@router.get("/{neighborhood_id}", deprecated=True, response_model=DengueCaseSeriesOut)
 async def get_casos(
     neighborhood_id: int,
     year_from: Optional[int] = Query(default=None, description="First epidemiological year to include"),

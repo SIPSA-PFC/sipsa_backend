@@ -17,7 +17,7 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.core.config import settings
-from src.api.controllers import predicao, casos, ovitrampas, auth, resultados
+from src.api.controllers import areas, auth, casos, dashboard, ovitrampas, predicao, resultados
 from src.api.controllers.auth import get_current_user
 from src.core.security import burn_password_check
 from src.core.database import AsyncSessionLocal
@@ -76,9 +76,9 @@ app.include_router(resultados.router)
 
 # Data routes require a logged-in user (any role).
 _login_required = [Depends(get_current_user)]
-app.include_router(casos.router,      dependencies=_login_required)
-app.include_router(ovitrampas.router, dependencies=_login_required)
-app.include_router(predicao.router,   dependencies=_login_required)
+for router in (areas.cidade, areas.distritos, areas.bairros, dashboard.router,
+               casos.router, ovitrampas.router, predicao.router):   # last three: deprecated aliases
+    app.include_router(router, dependencies=_login_required)
 
 
 @app.get("/health")

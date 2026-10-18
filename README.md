@@ -196,10 +196,22 @@ How the port compares with the paper: [`docs/REPRODUCTION.md`](docs/REPRODUCTION
 | `POST` | `/auth/token` | No | Yes | Login (form fields `username`, `password`), returns JWT |
 | `GET` | `/auth/me` | Yes | Yes | Logged-in username and role |
 | `GET` | `/resultados` | No | No | Pre-computed model metrics and predictions |
-| `GET` | `/casos/{id}` | Yes | Yes | Weekly dengue case series |
-| `GET` | `/ovitrampas/{id}` | Yes | Yes | Weekly OPI + EDI series |
-| `GET` | `/predicao` | Yes | Yes | City-wide forecast for the weeks after the latest data (1–4 weeks, by lag) |
+| `GET` | `/bairros` | Yes | Yes | The 36 neighborhoods: code, health district, coordinates, population |
+| `GET` | `/distritos` | Yes | Yes | The 5 health districts and their neighborhoods |
+| `GET` | `/cidade/casos` | Yes | Yes | Weekly cases for the city: total, mean per neighborhood, incidence per 100,000 |
+| `GET` | `/distritos/{id}/casos` | Yes | Yes | Same for a health district |
+| `GET` | `/bairros/{id}/casos` | Yes | Yes | Same for a neighborhood |
+| `GET` | `/cidade/ovitrampas` | Yes | Yes | Weekly mean OPI and EDI for the city |
+| `GET` | `/distritos/{id}/ovitrampas` | Yes | Yes | Same for a health district |
+| `GET` | `/bairros/{id}/ovitrampas` | Yes | Yes | Same for a neighborhood |
+| `GET` | `/cidade/previsao` | Yes | Yes | City forecast (the LSTM's output), 1–4 weeks ahead depending on the lag |
+| `GET` | `/distritos/{id}/previsao` | Yes | Yes | District forecast (city forecast × the district's share of cases) |
+| `GET` | `/bairros/{id}/previsao` | Yes | Yes | Neighborhood forecast (city forecast × the neighborhood's share of cases) |
+| `GET` | `/dashboard` | Yes | Yes | Main panel: this week's cases, city forecast, neighborhood risk, alerts, map |
 | `GET` | `/health` | No | No | Health check |
+
+Deprecated (still served, will be removed): `/casos/{id}` → `/bairros/{id}/casos`,
+`/ovitrampas/{id}` → `/bairros/{id}/ovitrampas`, `/predicao` → `/cidade/previsao`.
 
 ### Authentication
 
@@ -223,36 +235,49 @@ python -m src.cli list-users
 
 **`GET /resultados`** — No parameters, no token, no body. Reads the `.mat` file and returns metrics for all 10 models plus predicted vs actual time series for the two best models. Returns `503` if `Models_1DLSTM_2022_02_04_EvalResults.mat` is not in `data/raw/`.
 
-**`GET /predicao`** — Uses models saved by `python -m src.ml.train` (nothing is trained during a
-request). Returns `503` for a configuration with no trained model. The first request for a
-configuration loads its saved repetitions (a few seconds); forecasts are stored and reused until
-the data is reloaded.
+**Forecasts (`…/previsao`, `/dashboard`)** — Use models saved by `python -m src.ml.train`
+(nothing is trained during a request). Return `503` for a configuration with no trained model.
+The first request for a configuration loads its saved repetitions (a few seconds); forecasts are
+stored and reused until the data is reloaded.
+
+- **City:** the LSTM's own output (`method: "model"`). The paper's model is city-wide.
+- **District / neighborhood:** the city forecast multiplied by the area's share of the city's cases
+  during the model's training weeks (`method: "split"`). It assumes each area keeps its usual share,
+  so treat it as an estimate. The shares add up exactly to the city forecast.
+- **Risk level:** the forecast's peak week compared with the area's own weekly history up to the
+  as-of week: above the 50th percentile is `moderate`, above the 90th `high`, and fewer than 1
+  expected case is always `low` (`RISK_PERCENTILES`, `RISK_MIN_CASES` in `.env`). Each forecast
+  returns the thresholds it used. These are placeholders until the health team sets official ones.
+
+**City values:** `cases` is the total over all neighborhoods; `mean_per_neighborhood` is the
+paper's unit (what the model predicts); `incidence_per_100k` uses 2010 Census population.
 
 ### Query parameters
 
-`/casos/{id}` and `/ovitrampas/{id}` accept optional `year_from` and `year_to` (epidemiological years).
+The `…/casos` and `…/ovitrampas` routes accept optional `year_from` and `year_to` (epidemiological years).
 
 All weekly data uses Brazilian **epidemiological weeks** (Sunday–Saturday, as in SINAN):
 each point has `epi_year`, `epi_week` and `week_start` (the Sunday). Week 1 is the first
 week with at least 4 days in January, so it can start in late December.
 
-`/predicao` accepts:
+The `…/previsao` routes accept:
 - `input_type`: `"dengue"` or `"edi"` (default: `"edi"`)
 - `lag`: `1`, `3`, `4`, `5`, or `6` (default: `6`) — any other value returns `422`
 - `n_weeks`: weeks ahead, at most the lag window's newest input (lag 1 or 3: 1 week; 4: 2;
   5: 3; 6: 4). Default: that maximum. Forecasts only use data observed up to the latest week,
   so they cannot reach further.
 
-Each forecast point has `predicted_cases` (city total for the week), `lower_bound` /
+Each forecast point has `predicted_cases` (cases in the area that week), `lower_bound` /
 `upper_bound` (mean ± 1 standard deviation across the model's repetitions — their
-disagreement, not a calibrated interval) and `mean_per_neighborhood` (the model's own unit).
+disagreement, not a calibrated interval) and, for the city, `mean_per_neighborhood`.
+`/dashboard` accepts `input_type` and `lag`.
 
 ### Error responses
 
 | Status | Meaning |
 |---|---|
 | `401` | Missing or expired token |
-| `404` | Neighborhood not found |
+| `404` | Neighborhood or district not found |
 | `422` | Invalid query parameter, horizon beyond what the lag allows, or gaps in the data |
 | `503` | `.mat` file missing, or no trained model for the requested configuration |
 

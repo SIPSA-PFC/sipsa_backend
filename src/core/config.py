@@ -23,6 +23,16 @@ class Settings(BaseSettings):
     # ── Database ──────────────────────────────────────────────────────────────
     database_url: str = "postgresql+asyncpg://user:password@localhost:5432/dengue"
 
+    # ── Risk levels ───────────────────────────────────────────────────────────
+    # A forecast is "moderate" above this percentile of the area's own weekly
+    # cases so far, and "high" above the second. Relative thresholds work for
+    # any area size; replace them when the health team sets official ones.
+    risk_percentiles: tuple[int, int] = (50, 90)
+    # Below this many forecast cases in the peak week the risk stays "low",
+    # so neighborhoods whose typical week has 0 cases are not flagged for
+    # fractions of a case.
+    risk_min_cases: float = 1.0
+
     # ── Auth (RN07) ───────────────────────────────────────────────────────────
     # Required, no default: tokens signed with a known key can be forged.
     secret_key:                    str

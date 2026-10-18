@@ -91,6 +91,66 @@ class OvitrapSeriesOut(BaseModel):
 
 
 # =============================================================================
+# Areas — GET /bairros, /distritos
+# =============================================================================
+
+class NeighborhoodListOut(BaseModel):
+    id:            int
+    name:          str
+    code:          Optional[str] = None
+    district_id:   Optional[int] = None
+    district_name: Optional[str] = None
+    latitude:      Optional[float] = None
+    longitude:     Optional[float] = None
+    population:    Optional[int] = None      # 2010 Census
+
+
+class DistrictListOut(BaseModel):
+    id:               int
+    name:             str
+    neighborhood_ids: list[int]
+    population:       Optional[int] = None
+
+
+# =============================================================================
+# Area history — GET /cidade/casos, /distritos/{id}/casos, /bairros/{id}/casos
+# =============================================================================
+
+class AreaWeekCasesOut(BaseModel):
+    week_start:              date
+    epi_year:                int
+    epi_week:                int
+    cases:                   int                  # total notified cases in the area
+    neighborhoods_reporting: int
+    mean_per_neighborhood:   float                # the paper's / model's unit
+    incidence_per_100k:      Optional[float] = None   # cases per 100,000 residents (2010 population)
+
+
+class AreaCasesOut(BaseModel):
+    scope:      str                    # "city" | "district" | "neighborhood"
+    area_id:    Optional[int] = None
+    area_name:  str
+    population: Optional[int] = None
+    series:     list[AreaWeekCasesOut]
+
+
+class AreaWeekOvitrapOut(BaseModel):
+    week_start:              date
+    epi_year:                int
+    epi_week:                int
+    opi:                     Optional[float] = None   # mean share of positive traps (0–1)
+    edi:                     Optional[float] = None   # mean egg density index
+    neighborhoods_reporting: int
+
+
+class AreaOvitrapOut(BaseModel):
+    scope:     str
+    area_id:   Optional[int] = None
+    area_name: str
+    series:    list[AreaWeekOvitrapOut]
+
+
+# =============================================================================
 # Forecasts  — GET /predicao
 # =============================================================================
 
@@ -111,6 +171,14 @@ class ForecastPointOut(BaseModel):
     mean_per_neighborhood: Optional[float] = None   # the model's own unit (city scope only)
 
 
+class RiskThresholdsOut(BaseModel):
+    """Risk is relative to the area's own weekly history up to the as-of week."""
+    moderate_from: float     # weekly cases above this percentile of history → moderate
+    high_from:     float     # above this percentile → high
+    percentiles:   list[int]
+    history_weeks: int
+
+
 class ForecastOut(BaseModel):
     """
     A forecast made with data observed up to `as_of`.
@@ -127,41 +195,48 @@ class ForecastOut(BaseModel):
     method:        str              # "model" | "split"
     as_of:         WeekOut
     generated_at:  datetime
-    risk_level:    str              # "high" | "moderate" | "low"
+    risk_level:    str              # "high" | "moderate" | "low", from the highest forecast week
+    risk_thresholds: Optional[RiskThresholdsOut] = None
     series:        list[ForecastPointOut]
 
 
 # =============================================================================
 # Dashboard  — GET /dashboard
-# Aggregates everything the main panel needs in one request
+# Everything the main panel needs in one request
 # =============================================================================
 
 class MapBubbleOut(BaseModel):
-    """One bubble per neighborhood on the Leaflet map."""
+    """One bubble per neighborhood on the map."""
     neighborhood_id:       int
     name:                  str
     latitude:              float
     longitude:             float
     total_cases_this_week: int
     predicted_next_week:   Optional[float] = None
+    predicted_peak:        Optional[float] = None
     risk_level:            str
 
 
 class AlertOut(BaseModel):
-    """One card per high/moderate-risk neighborhood."""
+    """One card per neighborhood forecast at moderate or high risk."""
     neighborhood_id: int
     name:            str
     risk_level:      str
     message:         str
-    week_start:      date
+    week_start:      date            # week of the forecast peak
 
 
 class DashboardOut(BaseModel):
-    total_cases_this_week:   int
-    neighborhoods_on_alert:  int
-    mean_predicted_4_weeks:  float
-    alerts:                  list[AlertOut]
-    map:                     list[MapBubbleOut]
+    as_of:                     WeekOut
+    model_version:             str
+    input_type:                str
+    lag:                       int
+    total_cases_this_week:     int
+    neighborhoods_on_alert:    int
+    mean_predicted_next_weeks: float          # city total, mean over the forecast weeks
+    city_forecast:             list[ForecastPointOut]
+    alerts:                    list[AlertOut]
+    map:                       list[MapBubbleOut]
 
 
 # =============================================================================
