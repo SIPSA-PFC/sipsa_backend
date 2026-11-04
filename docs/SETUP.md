@@ -124,6 +124,8 @@ python -m src.ml.evaluate --run data/models/<run_id>    # compara com o artigo e
 ```
 
 - A API procura os modelos ao iniciar: reinicie-a depois de treinar.
+- Para cada configuração, a API usa o treino com mais repetições e, entre esses, o mais
+  recente. Um treino `--dev` (3 repetições) só é usado enquanto não houver um completo.
 - Para usar um treino já feito num banco novo ou recriado:
   `python -m src.ml.train --register data/models/<run_id>`.
 - Sem banco nem API, `python -m src.ml.evaluate` refaz as figuras do artigo a partir dos

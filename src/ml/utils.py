@@ -100,7 +100,8 @@ def compute_rmse(y_pred_log2: np.ndarray, y_test: np.ndarray):
     y_pred = 2.0 ** y_pred_log2
     y_test_rep = np.tile(y_test[:, None], (1, n_reps))
     rmse_per_rep = np.sqrt(np.mean((y_test_rep - y_pred) ** 2, axis=0))
-    return rmse_per_rep.mean(), rmse_per_rep.std() / np.sqrt(n_reps)
+    # ddof=1: MATLAB's std() divides by N-1.
+    return rmse_per_rep.mean(), rmse_per_rep.std(ddof=1) / np.sqrt(n_reps)
 
 
 def compute_r(y_pred_log2: np.ndarray, y_test: np.ndarray):
@@ -120,7 +121,8 @@ def compute_r(y_pred_log2: np.ndarray, y_test: np.ndarray):
         np.corrcoef(y_test, y_pred[:, i])[0, 1]
         for i in range(n_reps)
     ])
-    return r_vals.mean(), r_vals.std() / np.sqrt(n_reps)
+    # ddof=1: MATLAB's std() divides by N-1.
+    return r_vals.mean(), r_vals.std(ddof=1) / np.sqrt(n_reps)
 
 
 # ---------------------------------------------------------------------------

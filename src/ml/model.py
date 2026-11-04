@@ -60,6 +60,17 @@ def tf():
     return _tf
 
 
+def enable_determinism() -> None:
+    """
+    Make TensorFlow ops deterministic, so the same seed gives the same
+    network on the same machine and versions. Without it, parallel CPU/GPU
+    reductions may add numbers in a different order from run to run.
+    Process-wide; call once before training. Ops that have no deterministic
+    implementation raise an error instead of silently varying.
+    """
+    tf().config.experimental.enable_op_determinism()
+
+
 def half_mse(y_true, y_pred):
     """MATLAB regressionLayer loss for sequences: 1/2 x mean squared error over time steps."""
     t = tf()

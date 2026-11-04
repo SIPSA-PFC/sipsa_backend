@@ -6,7 +6,7 @@ Forecasts from saved models. Nothing is trained here: models come from
 
     registry = ModelRegistry()
     await registry.refresh(session)                 # at startup (and after training)
-    run = registry.get("edi", 6)                    # newest run for that configuration
+    run = registry.get("edi", 6)                    # run with most repetitions, then newest
     result = forecast(series, as_of_index, run, horizon=4)
 
 How a forecast is made (same procedure as the paper's test period):
@@ -58,7 +58,10 @@ class RunInfo:
 
 class ModelRegistry:
     """
-    Newest registered run per (input_type, lag), with its repetitions loaded
+    One registered run per (input_type, lag): the one with the most
+    repetitions, and among those the newest. A quick `--dev` run (3 reps)
+    therefore never replaces a full run (30 reps); it is used only while
+    no fuller run exists. Its repetitions are loaded
     on first use and kept in memory. Thread-safe: forecasts run in a
     threadpool.
     """
@@ -73,13 +76,18 @@ class ModelRegistry:
         from src.api.models.db_models import ModelRun
 
         rows = (await session.execute(
-            select(ModelRun).order_by(ModelRun.created_at.desc(), ModelRun.id.desc())
+            select(ModelRun).order_by(ModelRun.n_reps.desc(), ModelRun.created_at.desc(), ModelRun.id.desc())
         )).scalars().all()
         runs: dict[tuple[str, int], RunInfo] = {}
         for r in rows:
             key = (r.input_type, r.lag)
             path = ROOT / r.artifact_path
             if key in runs:
+                chosen = runs[key]
+                if r.n_reps < chosen.n_reps:
+                    log.info("model_run %s (%s lag %d, %d reps) not used: %s has %d reps",
+                             r.model_version, r.input_type, r.lag, r.n_reps,
+                             chosen.model_version, chosen.n_reps)
                 continue
             if not path.is_dir() or not any(path.glob("rep_*.keras")):
                 log.warning("model_run %s (%s lag %d): no saved models at %s; skipped",

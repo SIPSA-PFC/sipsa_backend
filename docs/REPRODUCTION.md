@@ -12,19 +12,21 @@ cores, TensorFlow 2.21. Reproduce with `python -m src.ml.train --run-id <name>` 
 
 | Configuration | Paper r | Ours r | Paper RMSE | Ours RMSE | Naive baseline (same lead) r / RMSE |
 |---|---|---|---|---|---|
-| dengue lag 1 (week i−1) | 0.899 | 0.614 ± 0.029 | 4.18 | 7.68 ± 0.27 | 0.929 / 2.85 |
-| dengue lag 3 (i−3…i−1) | 0.845 | 0.333 ± 0.064 | 6.02 | 9.58 ± 0.24 | 0.929 / 2.85 |
-| dengue lag 4 (i−4…i−2) | 0.731 | −0.167 ± 0.060 | 7.28 | 10.58 ± 0.12 | 0.863 / 3.95 |
-| dengue lag 5 (i−5…i−3) | 0.661 | −0.108 ± 0.071 | 7.71 | 10.43 ± 0.19 | 0.802 / 4.76 |
-| dengue lag 6 (i−6…i−4) | 0.537 | −0.244 ± 0.054 | 8.45 | 10.50 ± 0.14 | 0.745 / 5.40 |
+| dengue lag 1 (week i−1) | 0.899 | 0.614 ± 0.029 | 4.18 | 7.68 ± 0.28 | 0.929 / 2.85 |
+| dengue lag 3 (i−3…i−1) | 0.845 | 0.333 ± 0.066 | 6.02 | 9.58 ± 0.25 | 0.929 / 2.85 |
+| dengue lag 4 (i−4…i−2) | 0.731 | −0.167 ± 0.061 | 7.28 | 10.58 ± 0.13 | 0.863 / 3.95 |
+| dengue lag 5 (i−5…i−3) | 0.661 | −0.108 ± 0.072 | 7.71 | 10.43 ± 0.19 | 0.802 / 4.76 |
+| dengue lag 6 (i−6…i−4) | 0.537 | −0.244 ± 0.055 | 8.45 | 10.50 ± 0.14 | 0.745 / 5.40 |
 | EDI lag 1 | 0.851 | **0.883** ± 0.016 | 4.82 | 7.33 ± 0.39 | 0.929 / 2.85 |
-| EDI lag 3 | 0.803 | **0.836** ± 0.025 | 4.88 | 7.26 ± 0.43 | 0.929 / 2.85 |
-| EDI lag 4 | 0.784 | **0.824** ± 0.017 | 5.44 | 8.07 ± 0.42 | 0.863 / 3.95 |
-| EDI lag 5 | 0.850 | 0.798 ± 0.014 | 4.64 | 8.45 ± 0.42 | 0.802 / 4.76 |
-| EDI lag 6 | 0.879 | 0.794 ± 0.014 | 4.35 | 8.77 ± 0.42 | 0.745 / 5.40 |
+| EDI lag 3 | 0.803 | **0.836** ± 0.025 | 4.88 | 7.26 ± 0.44 | 0.929 / 2.85 |
+| EDI lag 4 | 0.784 | **0.824** ± 0.018 | 5.44 | 8.07 ± 0.43 | 0.863 / 3.95 |
+| EDI lag 5 | 0.850 | 0.798 ± 0.015 | 4.64 | 8.45 ± 0.43 | 0.802 / 4.76 |
+| EDI lag 6 | 0.879 | 0.794 ± 0.014 | 4.35 | 8.77 ± 0.43 | 0.745 / 5.40 |
 
-r and RMSE are averaged over repetitions (± standard error), on mean weekly cases per
-neighborhood, as in the paper. The naive baseline predicts each week with the value observed
+r and RMSE are averaged over repetitions (± standard error, with N−1 as in MATLAB's `std`),
+on mean weekly cases per neighborhood, as in the paper. A second run with deterministic ops
+(`lstm-paper-30r-det`, TensorFlow 2.21, 1 CPU core) gave the same r and RMSE for all 10
+configurations. The naive baseline predicts each week with the value observed
 as many weeks earlier as the configuration's newest input — the same information the model has.
 
 ### What this shows
