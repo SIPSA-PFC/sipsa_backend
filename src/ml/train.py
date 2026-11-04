@@ -52,14 +52,29 @@ ROOT       = Path(__file__).resolve().parent.parent.parent
 MODELS_DIR = ROOT / "data" / "models"
 TRAIN_SPLIT = 0.8
 
+# Every configuration the script can train, in a fixed order. A
+# configuration's seeds come from its position HERE, not in the list being
+# trained, so `--configs edi:6` trains exactly the same networks as edi_lag6
+# in a full run. The order equals the default of parse_configs(), so seeds of
+# full runs are unchanged.
+ALL_CONFIGS: tuple[tuple[str, int], ...] = tuple((i, lag) for i in INPUT_TYPES for lag in SUPPORTED_LAGS)
+
 
 def config_name(input_type: str, lag: int) -> str:
     return f"{input_type}_lag{lag}"
 
 
+def config_seed(base: int, input_type: str, lag: int, rep: int) -> int:
+    """
+    Seed of one repetition, fixed by (input_type, lag, rep) and the base seed.
+    Independent of which other configurations are trained in the same run.
+    """
+    return base * 100_000 + ALL_CONFIGS.index((input_type, lag)) * 1_000 + rep
+
+
 def parse_configs(text: str | None) -> list[tuple[str, int]]:
     if not text:
-        return [(i, lag) for i in INPUT_TYPES for lag in SUPPORTED_LAGS]
+        return list(ALL_CONFIGS)
     configs = []
     for item in text.split(","):
         input_type, lag = item.split(":")
@@ -167,6 +182,7 @@ def main(argv: list[str] | None = None) -> None:
                 await engine.dispose()
         series = asyncio.run(_load())
 
+    ml_model.enable_determinism()
     y = log2_transform(series.dengue, "dengue")
     n = len(y)
     log.info("Run %s: %d configurations x %d reps, %d weeks (%s to %s), %d for training",
@@ -187,7 +203,7 @@ def main(argv: list[str] | None = None) -> None:
         cfg_dir.mkdir(parents=True)
 
         for rep in range(n_reps):
-            model = ml_model.train_rep(x_train, y_train, seed=args.seed * 100_000 + ci * 1_000 + rep)
+            model = ml_model.train_rep(x_train, y_train, seed=config_seed(args.seed, input_type, lag, rep))
             y_pred[:, rep, ci] = ml_model.predict_sequence(model, x_all)[-len(test_t):]
             model.save(cfg_dir / f"rep_{rep:02d}.keras")
 
@@ -211,7 +227,9 @@ def main(argv: list[str] | None = None) -> None:
         "weeks": [f"{a}-{b:02d}" for a, b in (series.weeks[0], series.weeks[-1])],
         "test_weeks": [f"{a}-{b:02d}" for a, b in (series.weeks[test_targets[0]], series.weeks[test_targets[-1]])],
         "configs": names, "elapsed_seconds": round(elapsed),
-        "tensorflow": ml_model.tf().__version__, "python": platform.python_version(),
+        "tensorflow": ml_model.tf().__version__, "keras": ml_model.tf().keras.__version__,
+        "numpy": np.__version__, "python": platform.python_version(),
+        "deterministic_ops": True,
         "git_commit": _git_commit(),
     }, indent=2))
     log.info("Done in %.1f min. Saved to %s", elapsed / 60, out_dir)
